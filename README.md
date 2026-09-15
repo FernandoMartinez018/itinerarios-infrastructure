@@ -35,6 +35,7 @@ Servicios expuestos:
 | Gateway | http://localhost:8080 |
 | Airport Service (directo, solo debug) | http://localhost:8081/swagger-ui.html |
 | Itinerary Service (directo, solo debug) | http://localhost:8082/swagger-ui.html |
+| RabbitMQ Management UI | http://localhost:15672 (guest/guest por defecto) |
 | PostgreSQL airport_db | localhost:5433 |
 | PostgreSQL itinerary_db | localhost:5434 |
 
@@ -42,11 +43,15 @@ El frontend y cualquier cliente externo deben usar **solo** el Gateway (puerto 8
 Los puertos directos de Airport/Itinerary Service se exponen únicamente para debugging
 local y Swagger; en un despliegue real no deberían quedar expuestos públicamente.
 
-## Notification / RabbitMQ / Redis / Observabilidad
+## Notification / Redis / Observabilidad
 
-Comentados intencionalmente en `docker-compose.yml`. Se activan en Nivel 2 (Fase 7-11):
-RabbitMQ, Redis, Notification Service, Jaeger, Prometheus, Grafana, LocalStack.
-No agregarlos antes de cerrar Nivel 1 (regla 8 de la especificación maestra).
+Comentados intencionalmente en `docker-compose.yml`. Notification Service se activa en
+Fase 8, Redis en Fase 9, y observabilidad (Jaeger/Prometheus/Grafana/LocalStack) en
+Fase 9-11. RabbitMQ ya está activo desde Fase 7: Itinerary Service publica
+`ItineraryCreatedEvent` en el exchange `itinerary.events`, aunque todavía no hay ningún
+consumidor — los mensajes se acumulan sin consumir hasta que Notification Service
+exista (Fase 8). Puedes verificarlo en la pestaña "Exchanges" de
+http://localhost:15672.
 
 ## Apagar y limpiar
 

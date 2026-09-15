@@ -49,9 +49,26 @@ services:
     networks:
       - itinerarios-net
 
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672" # management UI: http://localhost:15672 (guest/guest por defecto)
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
+
   # postgres-notification y notification-service quedan definidos pero
-  # comentados hasta Nivel 2 (Fase 8, sección 30), ya que Notification
-  # depende de RabbitMQ, que todavía no forma parte de Nivel 1.
+  # comentados hasta Fase 8 (Notification Service todavía no existe como
+  # repositorio implementado).
   # postgres-notification:
   #   image: postgres:16-alpine
   #   container_name: postgres-notification
@@ -96,6 +113,10 @@ services:
       DB_USERNAME: ${ITINERARY_DB_USER:-itinerary_user}
       DB_PASSWORD: ${ITINERARY_DB_PASSWORD}
       AIRPORT_SERVICE_URL: http://airport-service:8081
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
     ports:
       - "8082:8082"
     depends_on:
@@ -103,6 +124,8 @@ services:
         condition: service_healthy
       airport-service:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     networks:
       - itinerarios-net
 
