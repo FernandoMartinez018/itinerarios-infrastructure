@@ -1,0 +1,135 @@
+version: "3.9"
+
+networks:
+  itinerarios-net:
+    driver: bridge
+
+volumes:
+  postgres-airport-data:
+  postgres-itinerary-data:
+  postgres-notification-data:
+
+services:
+
+  postgres-airport:
+    image: postgres:16-alpine
+    container_name: postgres-airport
+    environment:
+      POSTGRES_DB: airport_db
+      POSTGRES_USER: ${AIRPORT_DB_USER:-airport_user}
+      POSTGRES_PASSWORD: ${AIRPORT_DB_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-airport-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRPORT_DB_USER:-airport_user} -d airport_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
+
+  postgres-itinerary:
+    image: postgres:16-alpine
+    container_name: postgres-itinerary
+    environment:
+      POSTGRES_DB: itinerary_db
+      POSTGRES_USER: ${ITINERARY_DB_USER:-itinerary_user}
+      POSTGRES_PASSWORD: ${ITINERARY_DB_PASSWORD}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-itinerary-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ITINERARY_DB_USER:-itinerary_user} -d itinerary_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
+
+  # postgres-notification y notification-service quedan definidos pero
+  # comentados hasta Nivel 2 (Fase 8, sección 30), ya que Notification
+  # depende de RabbitMQ, que todavía no forma parte de Nivel 1.
+  # postgres-notification:
+  #   image: postgres:16-alpine
+  #   container_name: postgres-notification
+  #   environment:
+  #     POSTGRES_DB: notification_db
+  #     POSTGRES_USER: ${NOTIFICATION_DB_USER:-notification_user}
+  #     POSTGRES_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
+  #   ports:
+  #     - "5435:5432"
+  #   volumes:
+  #     - postgres-notification-data:/var/lib/postgresql/data
+  #   networks:
+  #     - itinerarios-net
+
+  airport-service:
+    build:
+      context: ../itinerarios-airport-service
+    container_name: airport-service
+    environment:
+      DB_HOST: postgres-airport
+      DB_PORT: 5432
+      DB_NAME: airport_db
+      DB_USERNAME: ${AIRPORT_DB_USER:-airport_user}
+      DB_PASSWORD: ${AIRPORT_DB_PASSWORD}
+      COLOMBIA_API_BASE_URL: ${COLOMBIA_API_BASE_URL:-https://api-colombia.com/api/v1}
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres-airport:
+        condition: service_healthy
+    networks:
+      - itinerarios-net
+
+  itinerary-service:
+    build:
+      context: ../itinerarios-itinerary-service
+    container_name: itinerary-service
+    environment:
+      DB_HOST: postgres-itinerary
+      DB_PORT: 5432
+      DB_NAME: itinerary_db
+      DB_USERNAME: ${ITINERARY_DB_USER:-itinerary_user}
+      DB_PASSWORD: ${ITINERARY_DB_PASSWORD}
+      AIRPORT_SERVICE_URL: http://airport-service:8081
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres-itinerary:
+        condition: service_healthy
+      airport-service:
+        condition: service_started
+    networks:
+      - itinerarios-net
+
+  gateway:
+    build:
+      context: ../itinerarios-gateway
+    container_name: gateway
+    environment:
+      AIRPORT_SERVICE_URL: http://airport-service:8081
+      ITINERARY_SERVICE_URL: http://itinerary-service:8082
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airport-service
+      - itinerary-service
+    networks:
+      - itinerarios-net
+
+  frontend:
+    build:
+      context: ../itinerarios-frontend
+    container_name: frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - gateway
+    networks:
+      - itinerarios-net

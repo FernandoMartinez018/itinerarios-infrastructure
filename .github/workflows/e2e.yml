@@ -1,0 +1,88 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout itinerarios-infrastructure
+        uses: actions/checkout@v4
+        with:
+          path: itinerarios-infrastructure
+
+      # NOTA: en CI real, cada repositorio (airport-service, itinerary-service,
+      # gateway, frontend) debe clonarse como hermano de itinerarios-infrastructure,
+      # igual que en local (ver README de infrastructure). Aquí se muestran los
+      # checkouts necesarios asumiendo que son repos públicos o con el mismo owner;
+      # ajustar `repository:` y credenciales según corresponda.
+      - name: Checkout airport-service
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/itinerarios-airport-service
+          path: itinerarios-airport-service
+
+      - name: Checkout itinerary-service
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/itinerarios-itinerary-service
+          path: itinerarios-itinerary-service
+
+      - name: Checkout gateway
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/itinerarios-gateway
+          path: itinerarios-gateway
+
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/itinerarios-frontend
+          path: itinerarios-frontend
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Crear .env para docker compose
+        working-directory: itinerarios-infrastructure
+        run: |
+          cp .env.example .env
+
+      - name: Levantar stack completo
+        working-directory: itinerarios-infrastructure
+        run: docker compose up --build -d
+
+      - name: Esperar a que el Gateway responda
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/actuator/health; then
+              echo "Gateway listo"
+              exit 0
+            fi
+            echo "Esperando Gateway... intento $i"
+            sleep 5
+          done
+          echo "Gateway no respondió a tiempo"
+          exit 1
+
+      - name: Ejecutar pruebas Selenium
+        working-directory: itinerarios-infrastructure/e2e-tests
+        run: mvn -B clean test -Dselenium.headless=true
+
+      - name: Logs de los servicios (si algo falla)
+        if: failure()
+        working-directory: itinerarios-infrastructure
+        run: docker compose logs
+
+      - name: Apagar el stack
+        if: always()
+        working-directory: itinerarios-infrastructure
+        run: docker compose down -v
