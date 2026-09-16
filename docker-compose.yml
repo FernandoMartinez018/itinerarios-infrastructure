@@ -49,6 +49,24 @@ services:
     networks:
       - itinerarios-net
 
+  redis:
+    # NOTA: no se pudo confirmar la última versión estable exacta desde este
+    # entorno (búsqueda sin resultado claro). redis:7-alpine es una etiqueta
+    # estable y ampliamente usada al momento de escribir esto; verificar si
+    # existe una línea mayor más reciente (Redis 8.x) antes de fijarla en
+    # un entorno real.
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
+
   rabbitmq:
     image: rabbitmq:4-management-alpine
     container_name: rabbitmq
@@ -66,22 +84,24 @@ services:
     networks:
       - itinerarios-net
 
-  # postgres-notification y notification-service quedan definidos pero
-  # comentados hasta Fase 8 (Notification Service todavía no existe como
-  # repositorio implementado).
-  # postgres-notification:
-  #   image: postgres:16-alpine
-  #   container_name: postgres-notification
-  #   environment:
-  #     POSTGRES_DB: notification_db
-  #     POSTGRES_USER: ${NOTIFICATION_DB_USER:-notification_user}
-  #     POSTGRES_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
-  #   ports:
-  #     - "5435:5432"
-  #   volumes:
-  #     - postgres-notification-data:/var/lib/postgresql/data
-  #   networks:
-  #     - itinerarios-net
+  postgres-notification:
+    image: postgres:16-alpine
+    container_name: postgres-notification
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: ${NOTIFICATION_DB_USER:-notification_user}
+      POSTGRES_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres-notification-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NOTIFICATION_DB_USER:-notification_user} -d notification_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
 
   airport-service:
     build:
@@ -94,10 +114,14 @@ services:
       DB_USERNAME: ${AIRPORT_DB_USER:-airport_user}
       DB_PASSWORD: ${AIRPORT_DB_PASSWORD}
       COLOMBIA_API_BASE_URL: ${COLOMBIA_API_BASE_URL:-https://api-colombia.com/api/v1}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "8081:8081"
     depends_on:
       postgres-airport:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - itinerarios-net
@@ -129,6 +153,30 @@ services:
     networks:
       - itinerarios-net
 
+  notification-service:
+    build:
+      context: ../itinerarios-notification
+    container_name: notification-service
+    environment:
+      DB_HOST: postgres-notification
+      DB_PORT: 5432
+      DB_NAME: notification_db
+      DB_USERNAME: ${NOTIFICATION_DB_USER:-notification_user}
+      DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres-notification:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - itinerarios-net
+
   gateway:
     build:
       context: ../itinerarios-gateway
@@ -136,6 +184,7 @@ services:
     environment:
       AIRPORT_SERVICE_URL: http://airport-service:8081
       ITINERARY_SERVICE_URL: http://itinerary-service:8082
+      NOTIFICATION_SERVICE_URL: http://notification-service:8083
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
     ports:
@@ -143,6 +192,7 @@ services:
     depends_on:
       - airport-service
       - itinerary-service
+      - notification-service
     networks:
       - itinerarios-net
 
