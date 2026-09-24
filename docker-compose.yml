@@ -84,6 +84,55 @@ services:
     networks:
       - itinerarios-net
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+    networks:
+      - itinerarios-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.113.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC (lo usan los 4 microservicios backend)
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      - jaeger
+    networks:
+      - itinerarios-net
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - itinerarios-net
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - itinerarios-net
+
   postgres-notification:
     image: postgres:16-alpine
     container_name: postgres-notification
@@ -116,6 +165,13 @@ services:
       COLOMBIA_API_BASE_URL: ${COLOMBIA_API_BASE_URL:-https://api-colombia.com/api/v1}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
+      OTEL_SERVICE_NAME: airport-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none # las métricas van por Micrometer -> Prometheus, no por OTel, para no duplicar pipelines
+      OTEL_LOGS_EXPORTER: none
     ports:
       - "8081:8081"
     depends_on:
@@ -123,6 +179,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     networks:
       - itinerarios-net
 
@@ -141,6 +199,13 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
+      OTEL_SERVICE_NAME: itinerary-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     ports:
       - "8082:8082"
     depends_on:
@@ -150,6 +215,8 @@ services:
         condition: service_started
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     networks:
       - itinerarios-net
 
@@ -167,6 +234,13 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
+      OTEL_SERVICE_NAME: notification-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     ports:
       - "8083:8083"
     depends_on:
@@ -174,6 +248,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     networks:
       - itinerarios-net
 
@@ -187,12 +263,20 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification-service:8083
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+      JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
+      OTEL_SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     ports:
       - "8080:8080"
     depends_on:
       - airport-service
       - itinerary-service
       - notification-service
+      - otel-collector
     networks:
       - itinerarios-net
 

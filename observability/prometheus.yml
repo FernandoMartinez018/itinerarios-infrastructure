@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: airport-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["airport-service:8081"]
+
+  - job_name: itinerary-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["itinerary-service:8082"]
+
+  - job_name: notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["notification-service:8083"]
+
+  - job_name: gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["gateway:8080"]

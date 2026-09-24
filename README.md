@@ -35,9 +35,15 @@ Servicios expuestos:
 | Gateway | http://localhost:8080 |
 | Airport Service (directo, solo debug) | http://localhost:8081/swagger-ui.html |
 | Itinerary Service (directo, solo debug) | http://localhost:8082/swagger-ui.html |
+| Notification Service (directo, solo debug) | http://localhost:8083/swagger-ui.html |
 | RabbitMQ Management UI | http://localhost:15672 (guest/guest por defecto) |
+| Jaeger (trazas distribuidas) | http://localhost:16686 |
+| Prometheus (métricas) | http://localhost:9090 |
+| Grafana (dashboards) | http://localhost:3000 (admin/admin por defecto) |
 | PostgreSQL airport_db | localhost:5433 |
 | PostgreSQL itinerary_db | localhost:5434 |
+| PostgreSQL notification_db | localhost:5435 |
+| Redis | localhost:6379 |
 
 El frontend y cualquier cliente externo deben usar **solo** el Gateway (puerto 8080).
 Los puertos directos de Airport/Itinerary Service se exponen únicamente para debugging
