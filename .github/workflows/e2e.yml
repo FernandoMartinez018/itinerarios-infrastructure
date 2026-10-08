@@ -32,6 +32,12 @@ jobs:
           repository: ${{ github.repository_owner }}/itinerarios-itinerary-service
           path: itinerarios-itinerary-service
 
+      - name: Checkout notification-service
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/itinerarios-notification
+          path: itinerarios-notification
+
       - name: Checkout gateway
         uses: actions/checkout@v4
         with:
