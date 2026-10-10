@@ -11,6 +11,10 @@ cuenta real.
 | `00-budget.yaml` | Presupuesto mensual con alertas (50% real, 80% real, 100% previsto) | Gratis (los 2 primeros presupuestos) |
 | `01-github-oidc.yaml` | Proveedor OIDC de GitHub + rol IAM de minimo privilegio (solo push a ECR) | Gratis |
 | `02-ecr.yaml` | 5 repositorios ECR (scan on push, conserva las ultimas 20 imagenes) | Almacenamiento por GB; centavos con estas imagenes |
+| `03-network.yaml` | VPC, 2 subredes publicas, IGW, SG de app y de RDS (sin NAT) | Gratis |
+| `04-rds.yaml` | PostgreSQL 16 db.t4g.micro, 3 bases logicas (`../init-rds-databases.sql`) | USD 0,016/h: **encender solo para probar** |
+
+Estado 2026-10-09 (ADR-017): 00-03 desplegados (USD 0). 04 probado y **eliminado**.
 
 **Pendiente, con costo real (no incluido hasta que lo apruebes):** VPC/subnets, RDS
 PostgreSQL, RabbitMQ (p. ej. Amazon MQ), ECS/Fargate + Load Balancer, Lambda y
@@ -39,6 +43,13 @@ aws cloudformation deploy --stack-name itinerarios-github-oidc \
 
 # 3. Repositorios ECR
 aws cloudformation deploy --stack-name itinerarios-ecr --template-file 02-ecr.yaml
+
+# 4. Red (AdminCidr opcional, /29-/32, solo para pruebas temporales contra RDS)
+aws cloudformation deploy --stack-name itinerarios-network --template-file 03-network.yaml
+
+# 5. RDS (COSTO): crear, probar y borrar con delete-stack al terminar
+aws cloudformation deploy --stack-name itinerarios-rds --template-file 04-rds.yaml
+aws cloudformation delete-stack --stack-name itinerarios-rds
 ```
 
 ## Luego, en cada repo de GitHub

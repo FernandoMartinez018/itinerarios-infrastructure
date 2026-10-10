@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  PostgreSQL RDS del Sistema de Itinerarios (paso 25, secciones 56-57 y 87). Una instancia
+  db.t4g.micro con las tres bases logicas (airport_db, itinerary_db, notification_db), cada
+  una con su propio usuario; se crean con aws/init-rds-databases.sql.
+  Password maestra administrada por Secrets Manager (nunca en parametros ni en Git).
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: itinerarios-network
+  EngineVersion:
+    Type: String
+    Default: '16.15'
+    Description: Misma linea mayor que Compose (postgres:16) para que Flyway se pruebe igual en local y en AWS.
+  PubliclyAccessible:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'true solo durante pruebas desde AdminCidr del stack de red; el SG sigue restringiendo.'
+
+Resources:
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subredes del sistema de itinerarios (2 AZ)
+      SubnetIds: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    # Delete (no Retain/Snapshot): entorno de pruebas sin datos reales; el usuario pidio
+    # apagar todo al terminar y un snapshot retenido seguiria cobrando almacenamiento.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Bases relacionales por microservicio con aislamiento logico en una sola instancia (seccion 56) para reducir costo.
+        must:
+          - Sin acceso 0.0.0.0/0 (seccion 57); el SG del stack de red controla el ingreso.
+          - Password solo en Secrets Manager (ManageMasterUserPassword).
+    Properties:
+      Engine: postgres
+      EngineVersion: !Ref EngineVersion
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: itinerarios_admin
+      ManageMasterUserPassword: true
+      DBName: itinerarios
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !ImportValue { 'Fn::Sub': '${NetworkStackName}-DatabaseSecurityGroupId' }
+      PubliclyAccessible: !Ref PubliclyAccessible
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+
+Outputs:
+  Endpoint:
+    Value: !GetAtt Database.Endpoint.Address
+    Export: { Name: !Sub '${AWS::StackName}-Endpoint' }
+  Port:
+    Value: !GetAtt Database.Endpoint.Port
+  MasterSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+    Export: { Name: !Sub '${AWS::StackName}-MasterSecretArn' }
