@@ -18,7 +18,7 @@ workspace/
 └── itinerarios-docs/
 ```
 
-## Levantar Nivel 1
+## Levantar el stack
 
 ```bash
 cp .env.example .env
@@ -44,20 +44,29 @@ Servicios expuestos:
 | PostgreSQL itinerary_db | localhost:5434 |
 | PostgreSQL notification_db | localhost:5435 |
 | Redis | localhost:6379 |
+| LocalStack (perfil `serverless`) | http://localhost:4566 |
 
 El frontend y cualquier cliente externo deben usar **solo** el Gateway (puerto 8080).
 Los puertos directos de Airport/Itinerary Service se exponen únicamente para debugging
 local y Swagger; en un despliegue real no deberían quedar expuestos públicamente.
 
-## Notification / Redis / Observabilidad
+## Servicios activos y perfiles
 
-Comentados intencionalmente en `docker-compose.yml`. Notification Service se activa en
-Fase 8, Redis en Fase 9, y observabilidad (Jaeger/Prometheus/Grafana/LocalStack) en
-Fase 9-11. RabbitMQ ya está activo desde Fase 7: Itinerary Service publica
-`ItineraryCreatedEvent` en el exchange `itinerary.events`, aunque todavía no hay ningún
-consumidor — los mensajes se acumulan sin consumir hasta que Notification Service
-exista (Fase 8). Puedes verificarlo en la pestaña "Exchanges" de
-http://localhost:15672.
+Todo el stack de Nivel 1 y Nivel 2 está activo en `docker-compose.yml`: los 5 servicios
+de aplicación, las 3 bases PostgreSQL, Redis, RabbitMQ, Jaeger, OpenTelemetry Collector,
+Prometheus y Grafana.
+
+LocalStack (simulación de AWS Lambda para Notification, secciones 31-32) va en el perfil
+`serverless` para no frenar el arranque del stack principal:
+
+```bash
+docker compose --profile serverless up -d localstack
+curl http://localhost:4566/_localstack/health
+```
+
+RabbitMQ: Itinerary Service escribe el evento en `outbox_events` y el `OutboxPublisher`
+lo publica en el exchange `itinerary.events`; Notification Service lo consume desde
+`notification.itinerary-created.queue` (ver http://localhost:15672).
 
 ## Apagar y limpiar
 

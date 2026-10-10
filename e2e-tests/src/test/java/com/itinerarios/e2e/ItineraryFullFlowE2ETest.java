@@ -3,17 +3,34 @@ package com.itinerarios.e2e;
 import com.itinerarios.e2e.support.SeleniumTestBase;
 import org.junit.jupiter.api.Test;
 import org.openqa.selenium.By;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Flujo E2E principal (sección 38 de la especificación maestra):
  *
  *   Open Angular -> Load airports -> Open map -> Create itinerary
  *   -> Validate airport -> Save itinerary -> Verify itinerary -> Edit -> Delete
+ *
+ * Tramo Nivel 2 (seccion 38): Create itinerary -> RabbitMQ -> Notification
+ * -> Verify notification history, consultado por HTTP a traves del Gateway
+ * (propiedad "e2e.gatewayUrl", por defecto http://localhost:8080).
  *
  * Requiere el stack completo levantado (docker compose up en
  * itinerarios-infrastructure) y accesible en la URL de la propiedad
@@ -24,12 +41,16 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
     private static final String TEST_USER = "Selenium E2E";
     private static final String DEPARTURE_IATA = "BOG";
     private static final String ARRIVAL_IATA = "MDE";
+    private static final String GATEWAY_URL = System.getProperty("e2e.gatewayUrl", "http://localhost:8080");
+    private static final HttpClient HTTP = HttpClient.newHttpClient();
 
     @Test
     void flujoCompletoDeCreacionEdicionYEliminacionDeItinerario() {
         login();
         loadAirportsAndVerifyMap();
+        int sentBefore = countSentNotificationsForTestUser();
         createItinerary();
+        verifyNotificationGenerated(sentBefore);
         String itineraryRowSelector = verifyItineraryAppearsInList();
         editItinerary(itineraryRowSelector);
         deleteItinerary();
@@ -65,7 +86,11 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         driver.findElement(By.id("arrivalAirportId")).sendKeys(ARRIVAL_IATA);
 
         String travelDate = java.time.LocalDate.now().plusDays(10).toString(); // yyyy-MM-dd
-        driver.findElement(By.id("travelDate")).sendKeys(travelDate);
+        // input type=date: sendKeys depende del locale de Chrome (dd/mm/aaaa en es); se asigna
+        // el valor ISO y se dispara "input" para que el formulario reactivo de Angular lo lea.
+        ((JavascriptExecutor) driver).executeScript(
+                "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+                driver.findElement(By.id("travelDate")), travelDate);
 
         WebElement durationInput = driver.findElement(By.id("durationMinutes"));
         durationInput.clear();
@@ -77,7 +102,7 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         // enviar el formulario. Si el código IATA no existiera, el
         // errorInterceptor mostraría el banner global; su ausencia confirma
         // que la validación pasó.
-        wait.until(ExpectedConditions.urlContains("/itineraries"));
+        wait.until(ExpectedConditions.urlMatches("/itineraries$")); // lista, no /new ni /edit
         assertFalse(isErrorBannerVisible(), "No debería aparecer el banner de error tras crear el itinerario");
     }
 
@@ -100,7 +125,7 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         durationInput.sendKeys("120");
 
         driver.findElement(By.cssSelector("form button[type='submit']")).click();
-        wait.until(ExpectedConditions.urlContains("/itineraries"));
+        wait.until(ExpectedConditions.urlMatches("/itineraries$")); // lista, no /new ni /edit
 
         String updatedRowSelector = String.format(
                 "//tr[td[text()='%s'] and td[text()='%s'] and td[text()='120']]",
@@ -119,6 +144,42 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         driver.switchTo().alert().accept();
 
         wait.until(ExpectedConditions.invisibilityOfElementLocated(By.xpath(updatedRowSelector)));
+    }
+
+    /** Espera (Outbox poll + RabbitMQ) a que aparezca una notificacion SENT nueva para el usuario de prueba. */
+    private void verifyNotificationGenerated(int sentBefore) {
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(30));
+        while (Instant.now().isBefore(deadline)) {
+            if (countSentNotificationsForTestUser() > sentBefore) {
+                return;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        fail("No se genero la notificacion del itinerario en 30 s (Outbox -> RabbitMQ -> Notification)");
+    }
+
+    // shortcut: cuenta por texto en vez de parsear JSON; basta mientras userName sea unico del test.
+    private int countSentNotificationsForTestUser() {
+        try {
+            HttpResponse<String> response = HTTP.send(
+                    HttpRequest.newBuilder(URI.create(GATEWAY_URL + "/api/notifications")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode(), "GET /api/notifications via Gateway");
+            Matcher m = Pattern.compile("\\{[^{}]*\"userName\":\"" + Pattern.quote(TEST_USER)
+                    + "\"[^{}]*\"status\":\"SENT\"[^{}]*}").matcher(response.body());
+            int count = 0;
+            while (m.find()) {
+                count++;
+            }
+            return count;
+        } catch (IOException | InterruptedException ex) {
+            throw new IllegalStateException("No se pudo consultar el historial de notificaciones", ex);
+        }
     }
 
     private boolean isErrorBannerVisible() {

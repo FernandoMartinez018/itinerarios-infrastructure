@@ -1,4 +1,4 @@
-version: "3.9"
+# Nota: la clave "version" es obsoleta en Docker Compose v2 y se eliminó.
 
 networks:
   itinerarios-net:
@@ -8,6 +8,7 @@ volumes:
   postgres-airport-data:
   postgres-itinerary-data:
   postgres-notification-data:
+  localstack-data:
 
 services:
 
@@ -85,7 +86,7 @@ services:
       - itinerarios-net
 
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/all-in-one:1.76.0 # ultima linea v1 (tag con parche: "1.62" no existe en Docker Hub)
     container_name: jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
@@ -126,6 +127,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./observability/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./observability/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:
@@ -147,6 +150,35 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${NOTIFICATION_DB_USER:-notification_user} -d notification_db"]
       interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - itinerarios-net
+
+  # LocalStack (secciones 31-32, 39-40, Nivel 2): simulación local de AWS Lambda
+  # para Notification. Va en el perfil "serverless" para no frenar el stack
+  # principal: `docker compose --profile serverless up -d localstack`.
+  # Se fija la línea 4.0 de la imagen comunitaria (sin suscripción, sección 104);
+  # LOCALSTACK_AUTH_TOKEN es opcional y solo aplica si el equipo decide usar una
+  # versión que lo exija. Ver ADR-015.
+  localstack:
+    image: localstack/localstack:4.0
+    container_name: localstack
+    profiles: ["serverless"]
+    environment:
+      SERVICES: lambda,logs,iam,sts,s3
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      # Los contenedores de la Lambda se unen a la red del stack para llegar a postgres-notification.
+      LAMBDA_DOCKER_NETWORK: itinerarios-infrastructure_itinerarios-net
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 10s
       timeout: 5s
       retries: 10
     networks:
