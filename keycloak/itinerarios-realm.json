@@ -4,14 +4,38 @@
   "accessTokenLifespan": 300,
   "sslRequired": "external",
   "clientScopes": [
-    { "name": "airport.read", "protocol": "openid-connect",
-      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
-    { "name": "itinerary.read", "protocol": "openid-connect",
-      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
-    { "name": "itinerary.write", "protocol": "openid-connect",
-      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
-    { "name": "notification.read", "protocol": "openid-connect",
-      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } }
+    {
+      "name": "airport.read",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "itinerary.read",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "itinerary.write",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "notification.read",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    }
   ],
   "clients": [
     {
@@ -25,7 +49,12 @@
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["airport.read", "itinerary.read", "itinerary.write", "notification.read"],
+      "defaultClientScopes": [
+        "airport.read",
+        "itinerary.read",
+        "itinerary.write",
+        "notification.read"
+      ],
       "optionalClientScopes": []
     },
     {
@@ -39,8 +68,30 @@
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "defaultClientScopes": ["airport.read"],
+      "defaultClientScopes": [
+        "airport.read"
+      ],
       "optionalClientScopes": []
+    }
+  ],
+  "users": [
+    {
+      "username": "${TEST_USER_EMAIL}",
+      "email": "${TEST_USER_EMAIL}",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Usuario",
+      "lastName": "de prueba",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${TEST_USER_PASSWORD}",
+          "temporary": true
+        }
+      ],
+      "requiredActions": [
+        "UPDATE_PASSWORD"
+      ]
     }
   ]
 }

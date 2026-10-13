@@ -188,6 +188,8 @@ Resources:
             - { Name: GATEWAY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
             - { Name: ITINERARY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/itinerary_secret' }
             - { Name: REALM_JSON, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/realm' }
+            - { Name: TEST_USER_EMAIL, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_email' }
+            - { Name: TEST_USER_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_password' }
           LogConfiguration:
             LogDriver: awslogs
             Options:
