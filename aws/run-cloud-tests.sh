@@ -42,7 +42,8 @@ teardown() {
   ssm_ delete-parameters --names /itinerarios/db/airport_password /itinerarios/db/itinerary_password \
        /itinerarios/db/notification_password /itinerarios/rabbitmq/password /itinerarios/db/keycloak_password \
        /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/oauth2/gateway_secret \
-       /itinerarios/oauth2/itinerary_secret >/dev/null 2>&1
+       /itinerarios/oauth2/itinerary_secret /itinerarios/keycloak/test_user_email \
+       /itinerarios/keycloak/test_user_password >/dev/null 2>&1
   for r in airport-service itinerary-service notification gateway frontend; do
     ids=$(aws_ ecr list-images --repository-name itinerarios-$r --query "imageIds[].imageDigest" --output text | tr '\t' '\n' | sort -u | sed 's/^/imageDigest=/' | tr '\n' ' ')
     [ -n "$ids" ] && aws_ ecr batch-delete-image --repository-name itinerarios-$r --image-ids $ids >/dev/null
@@ -68,7 +69,8 @@ log "== Encendido $(date +%T)"
 log "Rangos admin detectados: $N"
 deploy itinerarios-network 03-network.yaml --parameter-overrides AdminCidr="$CIDR" AdminCidr2="$CIDR2"
 for p in db/airport_password db/itinerary_password db/notification_password rabbitmq/password \
-         db/keycloak_password keycloak/admin_password oauth2/gateway_secret oauth2/itinerary_secret; do
+         db/keycloak_password keycloak/admin_password oauth2/gateway_secret oauth2/itinerary_secret \
+         keycloak/test_user_password; do
   ssm_ put-parameter --name "/itinerarios/$p" --type SecureString --overwrite \
        --value "$(python -c 'import secrets; print(secrets.token_urlsafe(24))')" >/dev/null
 done
@@ -77,6 +79,10 @@ python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separ
   "$(winpath "$HERE/../keycloak/itinerarios-realm.json")" > realm.min.json
 ssm_ put-parameter --name /itinerarios/keycloak/realm --type String --overwrite \
      --value "file://$(winpath "$PWD/realm.min.json")" >/dev/null && rm -f realm.min.json
+# Usuario de prueba de Keycloak: correo desde el entorno o el .env local (fuera de Git).
+TEST_USER_EMAIL="${TEST_USER_EMAIL:-$(grep -E '^TEST_USER_EMAIL=' "$HERE/../.env" 2>/dev/null | cut -d= -f2-)}"
+ssm_ put-parameter --name /itinerarios/keycloak/test_user_email --type String --overwrite \
+     --value "${TEST_USER_EMAIL:-tester@itinerarios.local}" >/dev/null
 getp() { ssm_ get-parameter --name "/itinerarios/$1" --with-decryption --query Parameter.Value --output text; }
 
 # Imagenes: se regeneran re-ejecutando el CI de main (push-image por OIDC).

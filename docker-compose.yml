@@ -202,6 +202,9 @@ services:
       KC_HEALTH_ENABLED: "true"
       GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
       ITINERARY_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
+      # Usuario de prueba (se crea en cada arranque al importar el realm). El correo real va en .env.
+      TEST_USER_EMAIL: ${TEST_USER_EMAIL:-tester@itinerarios.local}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-tester-dev}
     volumes:
       - ./keycloak/itinerarios-realm.json:/opt/keycloak/data/import/itinerarios-realm.json:ro
     ports:
