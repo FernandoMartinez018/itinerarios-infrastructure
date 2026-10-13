@@ -13,6 +13,7 @@ cuenta real.
 | `02-ecr.yaml` | 5 repositorios ECR (scan on push, conserva las ultimas 20 imagenes) | Almacenamiento por GB; centavos con estas imagenes |
 | `03-network.yaml` | VPC, 2 subredes publicas, IGW, SG de app y de RDS (sin NAT) | Gratis |
 | `04-rds.yaml` | PostgreSQL 16 db.t4g.micro, 3 bases logicas (`../init-rds-databases.sql`) | USD 0,016/h: **encender solo para probar** |
+| `05-ecs.yaml` | Cluster Fargate: gateway, airport, itinerary, notification, RabbitMQ, Redis; Cloud Map; logs | ≈ USD 0,11/h: **encender solo para probar** |
 
 Estado (ADR-017): 00-03 desplegados (USD 0). 04 probado y **eliminado**. Paso 26 (2026-10-13):
 push a ECR por OIDC verificado; imagenes borradas (USD 0). El claim `sub` de GitHub es inmutable
@@ -52,6 +53,11 @@ aws cloudformation deploy --stack-name itinerarios-network --template-file 03-ne
 # 5. RDS (COSTO): crear, probar y borrar con delete-stack al terminar
 aws cloudformation deploy --stack-name itinerarios-rds --template-file 04-rds.yaml
 aws cloudformation delete-stack --stack-name itinerarios-rds
+
+# 6. ECS (COSTO). Requiere imagenes en ECR, RDS inicializado y los SecureString
+#    /itinerarios/db/{airport,itinerary,notification}_password y /itinerarios/rabbitmq/password
+aws cloudformation deploy --stack-name itinerarios-ecs --template-file 05-ecs.yaml \n  --capabilities CAPABILITY_IAM --parameter-overrides AdminCidr=<tu-ip>/32 ImageTag=latest
+aws cloudformation delete-stack --stack-name itinerarios-ecs
 ```
 
 ## Luego, en cada repo de GitHub
