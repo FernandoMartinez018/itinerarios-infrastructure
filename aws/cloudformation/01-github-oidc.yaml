@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  GitHub Actions OIDC + rol de minimo privilegio para push de imagenes a ECR
+  (secciones 51-53 y 90). No se crean Access Keys.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Description: Usuario u organizacion de GitHub duenio de los repositorios.
+  RoleName:
+    Type: String
+    Default: github-actions-itinerarios
+    Description: Debe coincidir con la variable de GitHub AWS_ROLE_NAME.
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Una cuenta solo admite UN proveedor OIDC para token.actions.githubusercontent.com.
+      Poner 'false' si ya existe (y pasar su ARN en ExistingOidcProviderArn).
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+              # Los jobs push-image/deploy usan "environment: production", por lo
+              # que el claim sub tiene el formato repo:<owner>/<repo>:environment:<env>
+              # (no ref:refs/heads/main). Solo estos 5 repositorios pueden asumir el rol.
+              StringLike:
+                'token.actions.githubusercontent.com:sub':
+                  - !Sub 'repo:${GitHubOwner}/itinerarios-airport-service:environment:production'
+                  - !Sub 'repo:${GitHubOwner}/itinerarios-itinerary-service:environment:production'
+                  - !Sub 'repo:${GitHubOwner}/itinerarios-notification:environment:production'
+                  - !Sub 'repo:${GitHubOwner}/itinerarios-gateway:environment:production'
+                  - !Sub 'repo:${GitHubOwner}/itinerarios-frontend:environment:production'
+      Policies:
+        - PolicyName: ecr-push-itinerarios
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: EcrPushPull
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/itinerarios-*'
+        # Los permisos de ECS (deploy) se agregan cuando exista el cluster, acotados
+        # a sus servicios concretos (Fase 15). No se otorgan ahora.
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt GitHubActionsRole.Arn
+  RoleName:
+    Value: !Ref GitHubActionsRole

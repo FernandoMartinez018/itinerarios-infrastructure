@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Repositorios ECR de los 5 servicios desplegables (secciones 49 y 86).
+
+# Tags MUTABLE a proposito: el pipeline re-publica el tag auxiliar 'latest' en cada
+# push, lo que una politica IMMUTABLE bloquearia. El despliegue y el rollback usan
+# siempre el tag inmutable por SHA (secciones 83 y 84).
+
+Resources:
+  AirportServiceRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: itinerarios-airport-service
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Conservar las ultimas 20 imagenes (rollback, seccion 84)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+  ItineraryServiceRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: itinerarios-itinerary-service
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Conservar las ultimas 20 imagenes (rollback, seccion 84)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+  NotificationRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: itinerarios-notification
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Conservar las ultimas 20 imagenes (rollback, seccion 84)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+  GatewayRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: itinerarios-gateway
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Conservar las ultimas 20 imagenes (rollback, seccion 84)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+  FrontendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: itinerarios-frontend
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Conservar las ultimas 20 imagenes (rollback, seccion 84)",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+Outputs:
+  RegistryUri:
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com'

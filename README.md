@@ -18,7 +18,7 @@ workspace/
 └── itinerarios-docs/
 ```
 
-## Levantar Nivel 1
+## Levantar el stack
 
 ```bash
 cp .env.example .env
@@ -35,18 +35,38 @@ Servicios expuestos:
 | Gateway | http://localhost:8080 |
 | Airport Service (directo, solo debug) | http://localhost:8081/swagger-ui.html |
 | Itinerary Service (directo, solo debug) | http://localhost:8082/swagger-ui.html |
+| Notification Service (directo, solo debug) | http://localhost:8083/swagger-ui.html |
+| RabbitMQ Management UI | http://localhost:15672 (guest/guest por defecto) |
+| Jaeger (trazas distribuidas) | http://localhost:16686 |
+| Prometheus (métricas) | http://localhost:9090 |
+| Grafana (dashboards) | http://localhost:3000 (admin/admin por defecto) |
 | PostgreSQL airport_db | localhost:5433 |
 | PostgreSQL itinerary_db | localhost:5434 |
+| PostgreSQL notification_db | localhost:5435 |
+| Redis | localhost:6379 |
+| LocalStack (perfil `serverless`) | http://localhost:4566 |
 
 El frontend y cualquier cliente externo deben usar **solo** el Gateway (puerto 8080).
 Los puertos directos de Airport/Itinerary Service se exponen únicamente para debugging
 local y Swagger; en un despliegue real no deberían quedar expuestos públicamente.
 
-## Notification / RabbitMQ / Redis / Observabilidad
+## Servicios activos y perfiles
 
-Comentados intencionalmente en `docker-compose.yml`. Se activan en Nivel 2 (Fase 7-11):
-RabbitMQ, Redis, Notification Service, Jaeger, Prometheus, Grafana, LocalStack.
-No agregarlos antes de cerrar Nivel 1 (regla 8 de la especificación maestra).
+Todo el stack de Nivel 1 y Nivel 2 está activo en `docker-compose.yml`: los 5 servicios
+de aplicación, las 3 bases PostgreSQL, Redis, RabbitMQ, Jaeger, OpenTelemetry Collector,
+Prometheus y Grafana.
+
+LocalStack (simulación de AWS Lambda para Notification, secciones 31-32) va en el perfil
+`serverless` para no frenar el arranque del stack principal:
+
+```bash
+docker compose --profile serverless up -d localstack
+curl http://localhost:4566/_localstack/health
+```
+
+RabbitMQ: Itinerary Service escribe el evento en `outbox_events` y el `OutboxPublisher`
+lo publica en el exchange `itinerary.events`; Notification Service lo consume desde
+`notification.itinerary-created.queue` (ver http://localhost:15672).
 
 ## Apagar y limpiar
 
