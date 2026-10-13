@@ -25,6 +25,15 @@ PostgreSQL, RabbitMQ (p. ej. Amazon MQ), ECS/Fargate + Load Balancer, Lambda y
 ElastiCache/Redis. La seccion 48 pide revisar precios y Free Tier vigentes antes de
 crear cada uno; los precios cambian y no se asumen aqui.
 
+## Pruebas cloud integradas (paso 29)
+
+```bash
+AWS_CLI=aws GH_CLI=gh MVN=mvn bash aws/run-cloud-tests.sh [log]
+```
+
+Enciende red/RDS/ECS/Lambda, ejecuta 13 pruebas y **apaga siempre** (trap EXIT), con un inventario
+final. ≈ 45 min y ≈ USD 0,15 por corrida.
+
 ## Orden de despliegue
 
 Requiere AWS CLI configurado con un usuario administrador (una sola vez, solo para
