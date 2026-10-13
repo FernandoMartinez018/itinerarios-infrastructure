@@ -13,6 +13,7 @@ cuenta real.
 | `02-ecr.yaml` | 5 repositorios ECR (scan on push, conserva las ultimas 20 imagenes) | Almacenamiento por GB; centavos con estas imagenes |
 | `03-network.yaml` | VPC, 2 subredes publicas, IGW, SG de app y de RDS (sin NAT) | Gratis |
 | `04-rds.yaml` | PostgreSQL 16 db.t4g.micro, 3 bases logicas (`../init-rds-databases.sql`) | USD 0,016/h: **encender solo para probar** |
+| `06-lambda.yaml` | SendNotificationFunction java21 en la VPC (ZIP en S3) | Por invocacion (centavos); requiere RDS encendido |
 | `05-ecs.yaml` | Cluster Fargate: gateway, airport, itinerary, notification, RabbitMQ, Redis; Cloud Map; logs | ≈ USD 0,11/h: **encender solo para probar** |
 
 Estado (ADR-017): 00-03 desplegados (USD 0). 04 probado y **eliminado**. Paso 26 (2026-10-13):

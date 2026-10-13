@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SendNotificationFunction (paso 28, secciones 31, 58 y 89): Notification como AWS Lambda java21.
+  Reutiliza NotificationProcessor via NotificationLambdaHandler (misma logica que el consumer
+  RabbitMQ y que LocalStack). Corre en la VPC con el SG de la app para llegar a RDS sin abrirlo.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: itinerarios-network
+  RdsStackName:
+    Type: String
+    Default: itinerarios-rds
+  CodeBucket:
+    Type: String
+    Description: Bucket S3 con el ZIP (clases + lib/*.jar) generado por serverless/package-notification-lambda.
+  CodeKey:
+    Type: String
+    Default: notification-lambda.zip
+  DbPassword:
+    Type: String
+    NoEcho: true
+    Description: >
+      Password de notification_user, leida de SSM /itinerarios/db/notification_password al desplegar.
+      Concesion de prueba documentada en ADR-017 (paso 28): queda como variable de entorno cifrada
+      por Lambda con la clave administrada de AWS.
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/SendNotificationFunction
+      RetentionInDays: 1
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Minimo privilegio - solo logs y las ENIs que Lambda necesita para entrar a la VPC.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: SendNotificationFunction
+      Runtime: java21
+      Handler: com.itinerarios.notification.lambda.NotificationLambdaHandler::handleRequest
+      Role: !GetAtt FunctionRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      MemorySize: 1024
+      Timeout: 120
+      Architectures: [x86_64]
+      VpcConfig:
+        SubnetIds: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+        SecurityGroupIds: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+      Environment:
+        Variables:
+          DB_HOST: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' }
+          DB_PORT: '5432'
+          DB_NAME: notification_db
+          DB_USERNAME: notification_user
+          DB_PASSWORD: !Ref DbPassword
+
+Outputs:
+  FunctionName:
+    Value: !Ref Function
