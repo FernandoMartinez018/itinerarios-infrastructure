@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Microservicios del Sistema de Itinerarios en ECS Fargate (paso 27, secciones 55, 85 y 88).
+  Un servicio por microservicio + RabbitMQ y Redis como contenedores (ADR-017: Amazon MQ
+  minimo ~USD 100/mes). Descubrimiento por Cloud Map DNS privado. Sin NAT ni ALB: tareas
+  con IP publica solo para salir a ECR/API Colombia; unicamente el Gateway acepta trafico
+  externo y solo desde AdminCidr. Disenado para encender, probar y borrar (cuenta sin creditos).
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: itinerarios-network
+  RdsStackName:
+    Type: String
+    Default: itinerarios-rds
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Tag de las imagenes en ECR (SHA corto inmutable, o latest para pruebas).
+  AdminCidr:
+    Type: String
+    Description: Rango /29-/32 autorizado a llamar al Gateway (seccion 57, nunca 0.0.0.0/0).
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/(29|30|31|32)$'
+  ColombiaApiBaseUrl:
+    Type: String
+    Default: https://api-colombia.com/api/v1
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref AWS::StackName
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}'
+      RetentionInDays: 1
+
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: itinerarios.local
+      Vpc: !ImportValue { 'Fn::Sub': '${NetworkStackName}-VpcId' }
+
+  GatewaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Unico punto de entrada externo (seccion 33).
+        must:
+          - Ingreso 8080 solo desde AdminCidr; nunca 0.0.0.0/0.
+    Properties:
+      GroupDescription: Gateway - entrada externa restringida
+      VpcId: !ImportValue { 'Fn::Sub': '${NetworkStackName}-VpcId' }
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AdminCidr
+          Description: Admin (pruebas)
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: ECS agent - pull de ECR, logs y lectura de los SecureString de /itinerarios/*.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: read-itinerarios-params
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/*'
+
+  # ---------- Infraestructura de mensajeria y cache (contenedores) ----------
+  RabbitTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-rabbitmq'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: rabbitmq
+          Image: public.ecr.aws/docker/library/rabbitmq:4-management-alpine
+          PortMappings: [{ ContainerPort: 5672 }]
+          Environment:
+            - { Name: RABBITMQ_DEFAULT_USER, Value: itinerarios }
+          Secrets:
+            - { Name: RABBITMQ_DEFAULT_PASS, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/rabbitmq/password' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  RedisTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-redis'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: redis
+          Image: public.ecr.aws/docker/library/redis:7-alpine
+          PortMappings: [{ ContainerPort: 6379 }]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ---------- Microservicios ----------
+  AirportTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-airport'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: airport-service
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-airport-service:${ImageTag}'
+          PortMappings: [{ ContainerPort: 8081 }]
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
+            - { Name: DB_PORT, Value: '5432' }
+            - { Name: DB_NAME, Value: airport_db }
+            - { Name: DB_USERNAME, Value: airport_user }
+            - { Name: REDIS_HOST, Value: redis.itinerarios.local }
+            - { Name: COLOMBIA_API_BASE_URL, Value: !Ref ColombiaApiBaseUrl }
+          Secrets:
+            - { Name: DB_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/db/airport_password' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  ItineraryTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-itinerary'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: itinerary-service
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-itinerary-service:${ImageTag}'
+          PortMappings: [{ ContainerPort: 8082 }]
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
+            - { Name: DB_PORT, Value: '5432' }
+            - { Name: DB_NAME, Value: itinerary_db }
+            - { Name: DB_USERNAME, Value: itinerary_user }
+            - { Name: AIRPORT_SERVICE_URL, Value: 'http://airport.itinerarios.local:8081' }
+            - { Name: RABBITMQ_HOST, Value: rabbitmq.itinerarios.local }
+            - { Name: RABBITMQ_USERNAME, Value: itinerarios }
+          Secrets:
+            - { Name: DB_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/db/itinerary_password' }
+            - { Name: RABBITMQ_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/rabbitmq/password' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  NotificationTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-notification'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: notification-service
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-notification:${ImageTag}'
+          PortMappings: [{ ContainerPort: 8083 }]
+          Environment:
+            - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
+            - { Name: DB_PORT, Value: '5432' }
+            - { Name: DB_NAME, Value: notification_db }
+            - { Name: DB_USERNAME, Value: notification_user }
+            - { Name: RABBITMQ_HOST, Value: rabbitmq.itinerarios.local }
+            - { Name: RABBITMQ_USERNAME, Value: itinerarios }
+          Secrets:
+            - { Name: DB_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/db/notification_password' }
+            - { Name: RABBITMQ_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/rabbitmq/password' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  GatewayTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-gateway'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: gateway
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-gateway:${ImageTag}'
+          PortMappings: [{ ContainerPort: 8080 }]
+          Environment:
+            - { Name: AIRPORT_SERVICE_URL, Value: 'http://airport.itinerarios.local:8081' }
+            - { Name: ITINERARY_SERVICE_URL, Value: 'http://itinerary.itinerarios.local:8082' }
+            - { Name: NOTIFICATION_SERVICE_URL, Value: 'http://notification.itinerarios.local:8083' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ---------- Servicios ECS (1 tarea c/u) + registro DNS ----------
+  RabbitDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: rabbitmq
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  RedisDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: redis
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  AirportDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: airport
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  ItineraryDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: itinerary
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  NotificationDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: notification
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+
+  RabbitService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref RabbitTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt RabbitDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  RedisService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref RedisTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt RedisDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  AirportService:
+    Type: AWS::ECS::Service
+    DependsOn: RedisService
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref AirportTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt AirportDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  ItineraryService:
+    Type: AWS::ECS::Service
+    DependsOn: [RabbitService, AirportService]
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref ItineraryTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt ItineraryDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  NotificationService:
+    Type: AWS::ECS::Service
+    DependsOn: RabbitService
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref NotificationTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt NotificationDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  GatewayService:
+    Type: AWS::ECS::Service
+    DependsOn: [AirportService, ItineraryService, NotificationService]
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref GatewayTask
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  LogGroupName:
+    Value: !Ref LogGroup
