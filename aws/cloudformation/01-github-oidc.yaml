@@ -7,6 +7,12 @@ Parameters:
   GitHubOwner:
     Type: String
     Description: Usuario u organizacion de GitHub duenio de los repositorios.
+  GitHubOwnerId:
+    Type: String
+    AllowedPattern: '^\d+$'
+    Description: >
+      ID numerico del duenio (gh api users/<owner> --jq .id). GitHub emite el claim sub
+      inmutable "repo:<owner>@<ownerId>/<repo>@<repoId>:..." (use_immutable_subject).
   RoleName:
     Type: String
     Default: github-actions-itinerarios
@@ -52,16 +58,17 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-              # Los jobs push-image/deploy usan "environment: production", por lo
-              # que el claim sub tiene el formato repo:<owner>/<repo>:environment:<env>
-              # (no ref:refs/heads/main). Solo estos 5 repositorios pueden asumir el rol.
+              # Los jobs push-image/deploy usan "environment: production". GitHub emite el sub
+              # inmutable: repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>. Fijar el
+              # ownerId impide que otra cuenta con el mismo nombre asuma el rol; el repoId va
+              # con comodin porque solo el duenio puede crear repos bajo su cuenta.
               StringLike:
                 'token.actions.githubusercontent.com:sub':
-                  - !Sub 'repo:${GitHubOwner}/itinerarios-airport-service:environment:production'
-                  - !Sub 'repo:${GitHubOwner}/itinerarios-itinerary-service:environment:production'
-                  - !Sub 'repo:${GitHubOwner}/itinerarios-notification:environment:production'
-                  - !Sub 'repo:${GitHubOwner}/itinerarios-gateway:environment:production'
-                  - !Sub 'repo:${GitHubOwner}/itinerarios-frontend:environment:production'
+                  - !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/itinerarios-airport-service@*:environment:production'
+                  - !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/itinerarios-itinerary-service@*:environment:production'
+                  - !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/itinerarios-notification@*:environment:production'
+                  - !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/itinerarios-gateway@*:environment:production'
+                  - !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/itinerarios-frontend@*:environment:production'
       Policies:
         - PolicyName: ecr-push-itinerarios
           PolicyDocument:
