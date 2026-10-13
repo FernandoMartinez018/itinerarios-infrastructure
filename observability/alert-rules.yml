@@ -1,0 +1,47 @@
+# Alertas Prometheus (paso 31, seccion 108 - Nivel 3). Visibles en http://localhost:9090/alerts.
+# Sin Alertmanager: notificar por correo/Slack seria otro contenedor e integracion (no pedido).
+# Tests: observability/alert-rules.test.yml (promtool test rules).
+groups:
+  - name: itinerarios
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} no responde al scrape de Prometheus"
+          description: "El target {{ $labels.instance }} lleva mas de 1 minuto caido."
+
+      - alert: HighServerErrorRate
+        expr: |
+          sum by (application) (rate(http_server_requests_seconds_count{status=~"5..", uri!~"/actuator.*"}[5m]))
+            /
+          sum by (application) (rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m]))
+            > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.application }}: mas del 5% de respuestas 5xx"
+          description: "Tasa de errores 5xx: {{ $value | humanizePercentage }} en los ultimos 5 minutos."
+
+      # open + half_open agrupados: con wait-duration-in-open-state=15s el breaker pasa solo a
+      # HALF_OPEN y, sin trafico, se queda ahi; mirar solo "open" nunca cumplia el "for" (demo paso 31).
+      - alert: CircuitBreakerOpen
+        expr: max by (application, name) (resilience4j_circuitbreaker_state{state=~"open|half_open"}) == 1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} abierto o en prueba en {{ $labels.application }}"
+          description: "La dependencia protegida por {{ $labels.name }} no se ha recuperado (OPEN/HALF_OPEN); las llamadas fallan rapido (503)."
+
+      - alert: BulkheadSaturated
+        expr: resilience4j_bulkhead_available_concurrent_calls == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bulkhead {{ $labels.name }} sin cupos en {{ $labels.application }}"
+          description: "Todas las llamadas concurrentes permitidas estan ocupadas; las nuevas se rechazan con 503."

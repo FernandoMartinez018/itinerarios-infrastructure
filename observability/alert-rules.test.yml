@@ -1,0 +1,84 @@
+# Tests unitarios de las alertas: docker run --rm -v "$PWD/observability:/obs" --entrypoint promtool \
+#   prom/prometheus:v3.0.1 test rules /obs/alert-rules.test.yml
+rule_files:
+  - alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - name: ServiceDown solo dispara tras 1 minuto caido
+    interval: 15s
+    input_series:
+      - series: 'up{job="airport-service", instance="airport-service:8081"}'
+        values: '1 1 0 0 0 0 0 0'
+      - series: 'up{job="gateway", instance="gateway:8080"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 1m45s
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: airport-service, instance: "airport-service:8081" }
+            exp_annotations:
+              summary: "airport-service no responde al scrape de Prometheus"
+              description: "El target airport-service:8081 lleva mas de 1 minuto caido."
+
+  - name: HighServerErrorRate con 10% de 5xx y no con trafico sano
+    interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{application="itinerary-service", uri="/api/itineraries", status="201"}'
+        values: '0+90x10'
+      - series: 'http_server_requests_seconds_count{application="itinerary-service", uri="/api/itineraries", status="503"}'
+        values: '0+10x10'
+      - series: 'http_server_requests_seconds_count{application="airport-service", uri="/api/airports", status="200"}'
+        values: '0+100x10'
+      - series: 'http_server_requests_seconds_count{application="airport-service", uri="/actuator/health", status="503"}'
+        values: '0+100x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HighServerErrorRate
+        exp_alerts:
+          - exp_labels: { severity: warning, application: itinerary-service }
+            exp_annotations:
+              summary: "itinerary-service: mas del 5% de respuestas 5xx"
+              description: "Tasa de errores 5xx: 10% en los ultimos 5 minutos."
+
+  - name: CircuitBreakerOpen sigue disparando cuando el breaker pasa de OPEN a HALF_OPEN
+    interval: 15s
+    input_series:
+      - series: 'resilience4j_circuitbreaker_state{application="itinerary-service", name="airportService", state="open"}'
+        values: '0 1 0 0 0 0 0'
+      - series: 'resilience4j_circuitbreaker_state{application="itinerary-service", name="airportService", state="half_open"}'
+        values: '0 0 1 1 1 0 0'
+      - series: 'resilience4j_circuitbreaker_state{application="itinerary-service", name="airportService", state="closed"}'
+        values: '1 0 0 0 0 1 1'
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 45s
+        alertname: CircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, application: itinerary-service, name: airportService }
+            exp_annotations:
+              summary: "Circuit breaker airportService abierto o en prueba en itinerary-service"
+              description: "La dependencia protegida por airportService no se ha recuperado (OPEN/HALF_OPEN); las llamadas fallan rapido (503)."
+      - eval_time: 1m30s
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+
+  - name: BulkheadSaturated sin cupos 1 minuto
+    interval: 15s
+    input_series:
+      - series: 'resilience4j_bulkhead_available_concurrent_calls{application="itinerary-service", name="airportService"}'
+        values: '10 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: BulkheadSaturated
+        exp_alerts:
+          - exp_labels: { severity: warning, application: itinerary-service, name: airportService }
+            exp_annotations:
+              summary: "Bulkhead airportService sin cupos en itinerary-service"
+              description: "Todas las llamadas concurrentes permitidas estan ocupadas; las nuevas se rechazan con 503."
