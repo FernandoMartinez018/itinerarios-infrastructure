@@ -40,7 +40,9 @@ teardown() {
   aws_ cloudformation wait stack-delete-complete --stack-name itinerarios-rds
   aws_ s3 rm "s3://$BUCKET" --recursive --only-show-errors 2>/dev/null; aws_ s3api delete-bucket --bucket "$BUCKET" 2>/dev/null
   ssm_ delete-parameters --names /itinerarios/db/airport_password /itinerarios/db/itinerary_password \
-       /itinerarios/db/notification_password /itinerarios/rabbitmq/password >/dev/null 2>&1
+       /itinerarios/db/notification_password /itinerarios/rabbitmq/password /itinerarios/db/keycloak_password \
+       /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/oauth2/gateway_secret \
+       /itinerarios/oauth2/itinerary_secret >/dev/null 2>&1
   for r in airport-service itinerary-service notification gateway frontend; do
     ids=$(aws_ ecr list-images --repository-name itinerarios-$r --query "imageIds[].imageDigest" --output text | tr '\t' '\n' | sort -u | sed 's/^/imageDigest=/' | tr '\n' ' ')
     [ -n "$ids" ] && aws_ ecr batch-delete-image --repository-name itinerarios-$r --image-ids $ids >/dev/null
@@ -65,10 +67,16 @@ CIDR="$(echo "$IPS" | sed -n 1p)/32"; CIDR2=""; [ "$N" = 2 ] && CIDR2="$(echo "$
 log "== Encendido $(date +%T)"
 log "Rangos admin detectados: $N"
 deploy itinerarios-network 03-network.yaml --parameter-overrides AdminCidr="$CIDR" AdminCidr2="$CIDR2"
-for p in db/airport_password db/itinerary_password db/notification_password rabbitmq/password; do
+for p in db/airport_password db/itinerary_password db/notification_password rabbitmq/password \
+         db/keycloak_password keycloak/admin_password oauth2/gateway_secret oauth2/itinerary_secret; do
   ssm_ put-parameter --name "/itinerarios/$p" --type SecureString --overwrite \
        --value "$(python -c 'import secrets; print(secrets.token_urlsafe(24))')" >/dev/null
 done
+# Realm de Keycloak (sin secretos: placeholders ${...}) como String compacto en SSM; lo lee la tarea ECS.
+python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(',',':')))" \
+  "$(winpath "$HERE/../keycloak/itinerarios-realm.json")" > realm.min.json
+ssm_ put-parameter --name /itinerarios/keycloak/realm --type String --overwrite \
+     --value "file://$(winpath "$PWD/realm.min.json")" >/dev/null && rm -f realm.min.json
 getp() { ssm_ get-parameter --name "/itinerarios/$1" --with-decryption --query Parameter.Value --output text; }
 
 # Imagenes: se regeneran re-ejecutando el CI de main (push-image por OIDC).
@@ -96,13 +104,15 @@ deploy itinerarios-rds 04-rds.yaml --parameter-overrides PubliclyAccessible=true
 export EP=$(out itinerarios-rds Endpoint)
 export MPW=$(aws_ secretsmanager get-secret-value --secret-id "$(out itinerarios-rds MasterSecretArn)" --query SecretString --output text | python -c "import json,sys; print(json.load(sys.stdin)['password'])")
 export APW=$(getp db/airport_password) IPW=$(getp db/itinerary_password) NPW=$(getp db/notification_password)
+export KPW=$(getp db/keycloak_password)
 python - <<'EOF' || exit 1
 # Misma logica que aws/init-rds-databases.sql (sin depender de psql/Docker).
 import os, psycopg
 from psycopg import sql
 with psycopg.connect(host=os.environ["EP"], dbname="itinerarios", user="itinerarios_admin",
                      password=os.environ["MPW"], sslmode="require", autocommit=True) as c:
-    for s, pw in {"airport": os.environ["APW"], "itinerary": os.environ["IPW"], "notification": os.environ["NPW"]}.items():
+    for s, pw in {"airport": os.environ["APW"], "itinerary": os.environ["IPW"], "notification": os.environ["NPW"],
+                  "keycloak": os.environ["KPW"]}.items():
         role, db = f"{s}_user", f"{s}_db"
         verb = "ALTER" if c.execute("select 1 from pg_roles where rolname=%s", (role,)).fetchone() else "CREATE"
         c.execute(sql.SQL(verb + " ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(role), sql.Literal(pw)))
