@@ -14,7 +14,9 @@ cuenta real.
 | `03-network.yaml` | VPC, 2 subredes publicas, IGW, SG de app y de RDS (sin NAT) | Gratis |
 | `04-rds.yaml` | PostgreSQL 16 db.t4g.micro, 3 bases logicas (`../init-rds-databases.sql`) | USD 0,016/h: **encender solo para probar** |
 
-Estado 2026-10-09 (ADR-017): 00-03 desplegados (USD 0). 04 probado y **eliminado**.
+Estado (ADR-017): 00-03 desplegados (USD 0). 04 probado y **eliminado**. Paso 26 (2026-10-13):
+push a ECR por OIDC verificado; imagenes borradas (USD 0). El claim `sub` de GitHub es inmutable
+(`repo:<owner>@<ownerId>/<repo>@<repoId>:...`), por eso `GitHubOwnerId` es obligatorio.
 
 **Pendiente, con costo real (no incluido hasta que lo apruebes):** VPC/subnets, RDS
 PostgreSQL, RabbitMQ (p. ej. Amazon MQ), ECS/Fargate + Load Balancer, Lambda y
@@ -37,7 +39,7 @@ aws cloudformation deploy --stack-name itinerarios-budget \
 # 2. OIDC + rol (requiere CAPABILITY_NAMED_IAM por el nombre fijo del rol)
 aws cloudformation deploy --stack-name itinerarios-github-oidc \
   --template-file 01-github-oidc.yaml --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubOwner=<tu-usuario-o-org>
+  --parameter-overrides GitHubOwner=<tu-usuario-o-org> GitHubOwnerId=$(gh api users/<tu-usuario-o-org> --jq .id)
 # Si la cuenta ya tiene el proveedor OIDC de GitHub:
 #   CreateOidcProvider=false ExistingOidcProviderArn=arn:aws:iam::<id>:oidc-provider/token.actions.githubusercontent.com
 
