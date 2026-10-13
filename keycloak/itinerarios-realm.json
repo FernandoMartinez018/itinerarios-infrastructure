@@ -1,0 +1,46 @@
+{
+  "realm": "itinerarios",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "sslRequired": "external",
+  "clientScopes": [
+    { "name": "airport.read", "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
+    { "name": "itinerary.read", "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
+    { "name": "itinerary.write", "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } },
+    { "name": "notification.read", "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" } }
+  ],
+  "clients": [
+    {
+      "clientId": "gateway",
+      "description": "Gateway: unico punto de entrada; obtiene token de servicio para todas las rutas",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${GATEWAY_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["airport.read", "itinerary.read", "itinerary.write", "notification.read"],
+      "optionalClientScopes": []
+    },
+    {
+      "clientId": "itinerary-service",
+      "description": "Itinerary Service: solo valida aeropuertos contra Airport Service",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${ITINERARY_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["airport.read"],
+      "optionalClientScopes": []
+    }
+  ]
+}
