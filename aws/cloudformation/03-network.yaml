@@ -20,8 +20,15 @@ Parameters:
       nunca 0.0.0.0/0). Vacio = sin acceso externo. Quitarlo al terminar la prueba.
     AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/(29|30|31|32)$'
 
+  AdminCidr2:
+    Type: String
+    Default: ''
+    Description: Opcional. Segundo rango admin (redes con dos enlaces/ISP de salida balanceados).
+    AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/(29|30|31|32)$'
+
 Conditions:
   HasAdminCidr: !Not [!Equals [!Ref AdminCidr, '']]
+  HasAdminCidr2: !Not [!Equals [!Ref AdminCidr2, '']]
 
 Resources:
   Vpc:
@@ -119,6 +126,14 @@ Resources:
             ToPort: 5432
             CidrIp: !Ref AdminCidr
             Description: Admin temporal (pruebas)
+          - !Ref AWS::NoValue
+        - !If
+          - HasAdminCidr2
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: !Ref AdminCidr2
+            Description: Admin temporal (pruebas, segundo enlace)
           - !Ref AWS::NoValue
 
 Outputs:
