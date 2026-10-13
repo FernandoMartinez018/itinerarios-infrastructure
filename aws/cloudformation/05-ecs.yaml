@@ -150,6 +150,51 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
+  # ---------- Keycloak (seguridad S2S, paso 31) en modo produccion ----------
+  # start (no start-dev) con PostgreSQL en RDS (keycloak_db). Sin volumenes en Fargate: el realm llega
+  # por SSM (/itinerarios/keycloak/realm, String sin secretos) y se escribe al arrancar; los secretos de
+  # los clientes son placeholders ${...} resueltos desde SecureString. Sin ingreso externo: solo la VPC.
+  KeycloakTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-keycloak'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: keycloak
+          Image: quay.io/keycloak/keycloak:26.7.4
+          PortMappings: [{ ContainerPort: 8080 }]
+          EntryPoint: ['/bin/bash', '-c']
+          Command:
+            - 'mkdir -p /opt/keycloak/data/import && printf "%s" "$REALM_JSON" > /opt/keycloak/data/import/itinerarios-realm.json && exec /opt/keycloak/bin/kc.sh start --import-realm'
+          Environment:
+            - { Name: KC_DB, Value: postgres }
+            - Name: KC_DB_URL
+              Value: !Sub
+                - 'jdbc:postgresql://${Host}:5432/keycloak_db'
+                - Host: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' }
+            - { Name: KC_DB_USERNAME, Value: keycloak_user }
+            # Emisor fijo = nombre en Cloud Map, igual al que validan los servicios.
+            - { Name: KC_HOSTNAME, Value: 'http://keycloak.itinerarios.local:8080' }
+            - { Name: KC_HTTP_ENABLED, Value: 'true' }
+            - { Name: KC_HEALTH_ENABLED, Value: 'true' }
+            - { Name: KC_BOOTSTRAP_ADMIN_USERNAME, Value: admin }
+          Secrets:
+            - { Name: KC_DB_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/db/keycloak_password' }
+            - { Name: KC_BOOTSTRAP_ADMIN_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/admin_password' }
+            - { Name: GATEWAY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
+            - { Name: ITINERARY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/itinerary_secret' }
+            - { Name: REALM_JSON, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/realm' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
   # ---------- Microservicios ----------
   AirportTask:
     Type: AWS::ECS::TaskDefinition
@@ -166,6 +211,7 @@ Resources:
           PortMappings: [{ ContainerPort: 8081 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
             - { Name: DB_PORT, Value: '5432' }
             - { Name: DB_NAME, Value: airport_db }
@@ -196,6 +242,8 @@ Resources:
           PortMappings: [{ ContainerPort: 8082 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
+            - { Name: OAUTH2_TOKEN_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios/protocol/openid-connect/token' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
             - { Name: DB_PORT, Value: '5432' }
             - { Name: DB_NAME, Value: itinerary_db }
@@ -204,6 +252,7 @@ Resources:
             - { Name: RABBITMQ_HOST, Value: rabbitmq.itinerarios.local }
             - { Name: RABBITMQ_USERNAME, Value: itinerarios }
           Secrets:
+            - { Name: OAUTH2_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/itinerary_secret' }
             - { Name: DB_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/db/itinerary_password' }
             - { Name: RABBITMQ_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/rabbitmq/password' }
           LogConfiguration:
@@ -228,6 +277,7 @@ Resources:
           PortMappings: [{ ContainerPort: 8083 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
             - { Name: DB_PORT, Value: '5432' }
             - { Name: DB_NAME, Value: notification_db }
@@ -261,6 +311,9 @@ Resources:
             - { Name: AIRPORT_SERVICE_URL, Value: 'http://airport.itinerarios.local:8081' }
             - { Name: ITINERARY_SERVICE_URL, Value: 'http://itinerary.itinerarios.local:8082' }
             - { Name: NOTIFICATION_SERVICE_URL, Value: 'http://notification.itinerarios.local:8083' }
+            - { Name: OAUTH2_TOKEN_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios/protocol/openid-connect/token' }
+          Secrets:
+            - { Name: OAUTH2_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -294,6 +347,13 @@ Resources:
     Type: AWS::ServiceDiscovery::Service
     Properties:
       Name: itinerary
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  KeycloakDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: keycloak
       NamespaceId: !Ref Namespace
       DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
       HealthCheckCustomConfig: { FailureThreshold: 1 }
@@ -373,9 +433,22 @@ Resources:
           AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
           Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
           SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+  KeycloakService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref KeycloakTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt KeycloakDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED   # sin NAT: salida a quay.io por IP publica; SG sin ingreso externo
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
   GatewayService:
     Type: AWS::ECS::Service
-    DependsOn: [AirportService, ItineraryService, NotificationService]
+    DependsOn: [AirportService, ItineraryService, NotificationService, KeycloakService]
     Properties:
       Cluster: !Ref Cluster
       LaunchType: FARGATE

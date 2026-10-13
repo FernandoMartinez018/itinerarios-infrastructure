@@ -186,20 +186,22 @@ services:
       - itinerarios-net
 
   # Keycloak (paso 31, seguridad S2S, seccion 108): emite JWT con OAuth2 Client Credentials.
-  # Realm versionado en keycloak/itinerarios-realm.json; los secretos llegan por variables de entorno
-  # (placeholders ${...} del import), nunca en Git. Consola admin local: http://localhost:8180
+  # SOLO DESARROLLO: start-dev con base embebida y secretos de desarrollo por defecto (decision del
+  # usuario: en local se queman para que funcione sin configurar nada). .env puede sobrescribirlos.
+  # Produccion (AWS) usa modo start + PostgreSQL en RDS y secretos en SSM: ver aws/cloudformation/05-ecs.yaml.
+  # Consola admin local: http://localhost:8180 (admin / admin).
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.4
     container_name: keycloak
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       # Emisor fijo: los tokens llevan iss=http://keycloak:8080/realms/itinerarios para todos los servicios.
       KC_HOSTNAME: http://keycloak:8080
       KC_HEALTH_ENABLED: "true"
-      GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET}
-      ITINERARY_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET}
+      GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
+      ITINERARY_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
     volumes:
       - ./keycloak/itinerarios-realm.json:/opt/keycloak/data/import/itinerarios-realm.json:ro
     ports:
@@ -263,7 +265,7 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       OAUTH2_ISSUER_URI: http://keycloak:8080/realms/itinerarios
       OAUTH2_TOKEN_URI: http://keycloak:8080/realms/itinerarios/protocol/openid-connect/token
-      OAUTH2_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET}
+      OAUTH2_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: itinerary-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -332,7 +334,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
       OAUTH2_TOKEN_URI: http://keycloak:8080/realms/itinerarios/protocol/openid-connect/token
-      OAUTH2_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET}
+      OAUTH2_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
