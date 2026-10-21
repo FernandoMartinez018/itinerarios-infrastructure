@@ -197,14 +197,18 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      # Emisor fijo: los tokens llevan iss=http://keycloak:8080/realms/itinerarios para todos los servicios.
-      KC_HOSTNAME: http://keycloak:8080
+      # Hostname dinamico: el navegador entra por el nginx del frontend (localhost:4200/realms/...) y los
+      # servicios por keycloak:8080; los tokens de servicio siguen llevando iss=http://keycloak:8080/...
+      KC_HOSTNAME_STRICT: "false"
       KC_HEALTH_ENABLED: "true"
       GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
       ITINERARY_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
       # Usuario de prueba (se crea en cada arranque al importar el realm). El correo real va en .env.
       TEST_USER_EMAIL: ${TEST_USER_EMAIL:-tester@itinerarios.local}
       TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-tester-dev}
+      TEST_USER_FIRST_NAME: ${TEST_USER_FIRST_NAME:-Tester}
+      # Usuario tecnico de Selenium (contrasena no temporal).
+      E2E_USER_PASSWORD: ${E2E_USER_PASSWORD:-e2e-dev}
     volumes:
       - ./keycloak/itinerarios-realm.json:/opt/keycloak/data/import/itinerarios-realm.json:ro
     ports:
@@ -338,6 +342,7 @@ services:
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
       OAUTH2_TOKEN_URI: http://keycloak:8080/realms/itinerarios/protocol/openid-connect/token
       OAUTH2_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -365,9 +370,13 @@ services:
     build:
       context: ../itinerarios-frontend
     container_name: frontend
+    environment:
+      GATEWAY_UPSTREAM: http://gateway:8080
+      KEYCLOAK_UPSTREAM: http://keycloak:8080
     ports:
       - "4200:80"
     depends_on:
       - gateway
+      - keycloak
     networks:
       - itinerarios-net

@@ -110,21 +110,47 @@ try {
     Esperar 'http://localhost:8081/swagger-ui.html' 'swagger airport'
     Esperar 'http://localhost:8082/swagger-ui.html' 'swagger itinerary'
 
-    Paso '3b. Flujo de negocio por el Gateway'
-    $aeropuerto = Invoke-RestMethod 'http://localhost:8080/api/airports/iata/BOG'
+    Paso '3b. Flujo de negocio por el Gateway (sesion de Keycloak, ADR-018)'
+    # La API exige usuario: login OIDC real con el usuario tecnico e2e, por el frontend (mismo origen).
+    $m = Select-String -Path (Join-Path $Infra '.env') -Pattern '^E2E_USER_PASSWORD=(.*)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $e2ePass = if ($m) { $m.Matches[0].Groups[1].Value.Trim() } else { 'e2e-dev' }   # default de docker-compose.yml
+    $front = 'http://localhost:4200'
+    try {
+        $null = Invoke-WebRequest "$front/api/itineraries" -UseBasicParsing
+        Falla 'La API sin sesion deberia devolver 401'
+    } catch {
+        if ($_.Exception.Response.StatusCode.value__ -eq 401) { Ok 'API sin sesion -> 401' } else { Falla "API sin sesion devolvio $($_.Exception.Response.StatusCode.value__)" }
+    }
+    # curl.exe (incluido en Windows): Invoke-WebRequest de PS 5.1 pierde las cookies de las redirecciones.
+    $jar = Join-Path $env:TEMP 'itinerarios-cookies.txt'; Remove-Item $jar -ErrorAction SilentlyContinue
+    $form = (& curl.exe -s -L -c $jar -b $jar "$front/oauth2/authorization/keycloak") -join "`n"
+    $action = [System.Net.WebUtility]::HtmlDecode(([regex]'action="([^"]+)"').Match($form).Groups[1].Value)
+    $next = & curl.exe -s -c $jar -b $jar -o NUL -w '%{redirect_url}' --data-urlencode 'username=e2e' --data-urlencode "password=$e2ePass" $action
+    $null = & curl.exe -s -c $jar -b $jar -o NUL $next
+    $kc = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    foreach ($linea in Get-Content $jar) {
+        $c = ($linea -replace '^#HttpOnly_', '') -split "`t"
+        if ($c.Count -eq 7 -and $c[0] -eq 'localhost') { $kc.Cookies.Add((New-Object System.Net.Cookie($c[5], $c[6], $c[2], 'localhost'))) }
+    }
+    Remove-Item $jar -ErrorAction SilentlyContinue
+    $yo = Invoke-RestMethod "$front/auth/me" -WebSession $kc
+    Ok "Login Keycloak OK: $($yo.name)"
+    $xsrf = @{ 'X-XSRF-TOKEN' = $kc.Cookies.GetCookies($front)['XSRF-TOKEN'].Value }
+
+    $aeropuerto = Invoke-RestMethod "$front/api/airports/iata/BOG" -WebSession $kc
     Ok "Aeropuerto BOG: $($aeropuerto.name)"
-    $null = Invoke-RestMethod 'http://localhost:8080/api/airports/iata/MDE'
+    $null = Invoke-RestMethod "$front/api/airports/iata/MDE" -WebSession $kc
 
     $body = @{
         userName = 'verificacion'; departureAirportId = 'BOG'; arrivalAirportId = 'MDE'
         travelDate = (Get-Date).AddDays(30).ToString('yyyy-MM-dd'); durationMinutes = 60
     } | ConvertTo-Json
-    $creado = Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/itineraries' `
-        -ContentType 'application/json' -Body $body -Headers @{ 'X-Correlation-ID' = 'verificacion-001' }
+    $creado = Invoke-RestMethod -Method Post -Uri "$front/api/itineraries" -WebSession $kc `
+        -ContentType 'application/json' -Body $body -Headers ($xsrf + @{ 'X-Correlation-ID' = 'verificacion-001' })
     Ok "Itinerario creado id=$($creado.id)"
 
     try {
-        $null = Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/itineraries' `
+        $null = Invoke-RestMethod -Method Post -Uri "$front/api/itineraries" -WebSession $kc -Headers $xsrf `
             -ContentType 'application/json' -Body ($body -replace '"MDE"','"ZZZ"')
         Falla 'Un aeropuerto inexistente debería devolver 400'
     } catch {
@@ -133,11 +159,11 @@ try {
     }
 
     Start-Sleep -Seconds 8   # ciclo del OutboxPublisher (2 s) + consumo
-    $hist = Invoke-RestMethod "http://localhost:8080/api/notifications/itinerary/$($creado.id)"
+    $hist = Invoke-RestMethod "$front/api/notifications/itinerary/$($creado.id)" -WebSession $kc
     if (@($hist).Count -ge 1) { Ok 'Notificación registrada (Outbox -> RabbitMQ -> Notification)' }
     else { Falla 'No se registró la notificación del itinerario creado' }
 
-    Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/api/itineraries/$($creado.id)" | Out-Null
+    Invoke-RestMethod -Method Delete -Uri "$front/api/itineraries/$($creado.id)" -WebSession $kc -Headers $xsrf | Out-Null
     Ok 'Itinerario eliminado'
 
     Esperar 'http://localhost:9090/-/ready' 'prometheus'
@@ -155,7 +181,7 @@ try {
         }
         if (-not $mvn) { Pop-Location; Falla 'No se encontró Maven para Selenium' }
         # Socket temporal en ruta corta: con %TEMP% largo el HttpClient de Java falla en Windows.
-        & $mvn -B -ntp clean test "-Djdk.net.unixdomain.tmpdir=$HOME"
+        & $mvn -B -ntp clean test "-Djdk.net.unixdomain.tmpdir=$HOME" "-De2e.password=$e2ePass"
         $codigo = $LASTEXITCODE
         Pop-Location
         if ($codigo -ne 0) { Falla 'Selenium E2E' }

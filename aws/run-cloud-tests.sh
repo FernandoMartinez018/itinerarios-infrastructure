@@ -45,7 +45,8 @@ teardown() {
        /itinerarios/db/notification_password /itinerarios/rabbitmq/password /itinerarios/db/keycloak_password \
        /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/oauth2/gateway_secret \
        /itinerarios/oauth2/itinerary_secret /itinerarios/keycloak/test_user_email \
-       /itinerarios/keycloak/test_user_password /itinerarios/grafana/admin_password >/dev/null 2>&1
+       /itinerarios/keycloak/test_user_password /itinerarios/grafana/admin_password \
+       /itinerarios/keycloak/test_user_first_name /itinerarios/keycloak/e2e_user_password >/dev/null 2>&1
   ssm_ delete-parameters --names /itinerarios/observability/prometheus_yml /itinerarios/observability/alert_rules        /itinerarios/observability/grafana_datasources /itinerarios/observability/grafana_dashboards        /itinerarios/observability/grafana_dashboard_json >/dev/null 2>&1
   for r in airport-service itinerary-service notification gateway frontend; do
     ids=$(aws_ ecr list-images --repository-name itinerarios-$r --query "imageIds[].imageDigest" --output text | tr '\t' '\n' | sort -u | sed 's/^/imageDigest=/' | tr '\n' ' ')
@@ -75,7 +76,7 @@ log "Rangos admin detectados: $N"
 deploy itinerarios-network 03-network.yaml --parameter-overrides AdminCidr="$CIDR" AdminCidr2="$CIDR2"
 for p in db/airport_password db/itinerary_password db/notification_password rabbitmq/password \
          db/keycloak_password keycloak/admin_password oauth2/gateway_secret oauth2/itinerary_secret \
-         keycloak/test_user_password grafana/admin_password; do
+         keycloak/test_user_password keycloak/e2e_user_password grafana/admin_password; do
   ssm_ put-parameter --name "/itinerarios/$p" --type SecureString --overwrite \
        --value "$(python -c 'import secrets; print(secrets.token_urlsafe(24))')" >/dev/null
 done
@@ -88,6 +89,9 @@ ssm_ put-parameter --name /itinerarios/keycloak/realm --type String --overwrite 
 TEST_USER_EMAIL="${TEST_USER_EMAIL:-$(grep -E '^TEST_USER_EMAIL=' "$HERE/../.env" 2>/dev/null | cut -d= -f2-)}"
 ssm_ put-parameter --name /itinerarios/keycloak/test_user_email --type String --overwrite \
      --value "${TEST_USER_EMAIL:-tester@itinerarios.local}" >/dev/null
+TEST_USER_FIRST_NAME="${TEST_USER_FIRST_NAME:-$(grep -E '^TEST_USER_FIRST_NAME=' "$HERE/../.env" 2>/dev/null | cut -d= -f2- | tr -d '\r')}"
+ssm_ put-parameter --name /itinerarios/keycloak/test_user_first_name --type String --overwrite \
+     --value "${TEST_USER_FIRST_NAME:-Tester}" >/dev/null
 # Configuracion de observabilidad (sin secretos) que las tareas ECS escriben a disco al arrancar.
 OBS="$HERE/../observability"
 for kv in prometheus_yml=aws/prometheus.yml alert_rules=alert-rules.yml grafana_datasources=aws/grafana-datasources.yaml           grafana_dashboards=aws/grafana-dashboards.yaml grafana_dashboard_json=dashboards/itinerarios-overview.json; do
@@ -159,20 +163,38 @@ pubip() {
 }
 GW="http://$(pubip GatewayService):8080"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
 for i in $(seq 1 60); do curl -sf --max-time 5 "$GW/actuator/health" >/dev/null && break; sleep 5; done
+# La API se usa por el frontend (nginx -> Gateway), como el navegador: la sesion es del mismo origen.
+FE="http://$(pubip FrontendService)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+JAR="$HERE/cookies.tmp"; rm -f "$JAR"
+xsrf() { awk '$6=="XSRF-TOKEN"{t=$7} END{print t}' "$JAR" 2>/dev/null; }
+api() { curl -s --max-time 60 -b "$JAR" -c "$JAR" -H "X-XSRF-TOKEN: $(xsrf)" "$@"; }
+# Login OIDC con el usuario tecnico e2e: Gateway -> pantalla de Keycloak -> callback -> cookie SESSION.
+kc_login() {
+  local form action next
+  rm -f "$JAR"
+  form=$(curl -s -L --max-time 30 -b "$JAR" -c "$JAR" "$FE/oauth2/authorization/keycloak")
+  action=$(echo "$form" | grep -oE 'id="kc-form-login"[^>]*action="[^"]+"|action="[^"]+"[^>]*id="kc-form-login"' | grep -oE 'action="[^"]+"' | sed 's/action="//;s/"$//;s/&amp;/\&/g')  # NOSONAR http de la demo (ADR-017)
+  [[ -n "$action" ]] || return 1
+  next=$(curl -s --max-time 30 -b "$JAR" -c "$JAR" -o /dev/null -w '%{redirect_url}' \
+         --data-urlencode username=e2e --data-urlencode "password=$(getp keycloak/e2e_user_password)" "$action")  # NOSONAR http de la demo (ADR-017)
+  curl -s --max-time 30 -b "$JAR" -c "$JAR" -o /dev/null "$next"  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' "$FE/auth/me")" = 200 ]]  # NOSONAR http de la demo (ADR-017)
+}
+for i in $(seq 1 60); do kc_login && break; sleep 10; done
 # Gateway UP no basta: Airport/Itinerary/Notification arrancan Spring + Flyway contra RDS.
 # Un fallo temprano abriria el Circuit Breaker y contaminaria las pruebas.
 for i in $(seq 1 60); do
-  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$GW/api/airports/iata/MDE")" = 200 ] &&
-  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$GW/api/itineraries")" = 200 ] &&
-  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$GW/api/notifications")" = 200 ] && break
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/airports/iata/MDE")" = 200 ]] &&  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/itineraries")" = 200 ]] &&  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/notifications")" = 200 ]] && break  # NOSONAR http de la demo (ADR-017)
   sleep 10
 done
 log "Todo encendido y listo $(date +%T)"
 
 # ---------------------------------------------------------------- pruebas
-http() { curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$@"; }
+http() { api -o /dev/null -w '%{http_code}' "$@"; }
 body() { echo "{\"userName\":\"cloud-test\",\"departureAirportId\":\"BOG\",\"arrivalAirportId\":\"$1\",\"travelDate\":\"2026-12-20\",\"durationMinutes\":$2}"; }
-post() { curl -s --max-time 60 -H 'Content-Type: application/json' -H "X-Correlation-ID: $1" -X POST "$GW/api/itineraries" -d "$2"; }
+post() { api -H 'Content-Type: application/json' -H "X-Correlation-ID: $1" -X POST "$FE/api/itineraries" -d "$2"; }  # NOSONAR http de la demo (ADR-017)
 db() { python -c "
 import os, sys, psycopg
 with psycopg.connect(host=os.environ['EP'], dbname=sys.argv[1], user=sys.argv[2], password=os.environ[sys.argv[3]], sslmode='require') as c:
@@ -181,15 +203,17 @@ with psycopg.connect(host=os.environ['EP'], dbname=sys.argv[1], user=sys.argv[2]
 log ""; log "== Pruebas"
 TESTS_START_MS=$(( $(date +%s) * 1000 - 60000 ))  # ventana acotada para CloudWatch (sin ella el CLI pagina ~60 min)
 check "1. Gateway health UP" 'curl -s --max-time 10 $GW/actuator/health | grep -q "\"status\":\"UP\""'
-AIR=$(curl -s --max-time 60 "$GW/api/airports/iata/BOG")
+check "1b. API sin sesion -> 401 y login Keycloak (usuario e2e) -> /auth/me 200" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 $FE/api/itineraries)" = 401 ] && api $FE/auth/me | grep -q "\"username\":\"e2e\""'
+AIR=$(api "$FE/api/airports/iata/BOG")  # NOSONAR http de la demo (ADR-017)
 check "2. BOG = El Dorado con coordenadas en Colombia" 'echo "$AIR" | python -c "import json,sys; a=json.load(sys.stdin); sys.exit(0 if a[\"icaoCode\"]==\"SKBO\" and -5<a[\"latitude\"]<14 and -82<a[\"longitude\"]<-66 else 1)"'
 CREATED=$(post cloud-29-001 "$(body MDE 60)"); ID=$(echo "$CREATED" | python -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
 check "3a. POST valido -> 201 (id=$ID)" '[ -n "$ID" ]'
-check "3b. Aeropuerto inexistente -> 400" '[ "$(http -H "Content-Type: application/json" -X POST $GW/api/itineraries -d "$(body ZZZ 60)")" = 400 ]'
-check "3c. durationMinutes=0 -> 400" '[ "$(http -H "Content-Type: application/json" -X POST $GW/api/itineraries -d "$(body MDE 0)")" = 400 ]'
+check "3b. Aeropuerto inexistente -> 400" '[ "$(http -H "Content-Type: application/json" -X POST $FE/api/itineraries -d "$(body ZZZ 60)")" = 400 ]'
+check "3c. durationMinutes=0 -> 400" '[ "$(http -H "Content-Type: application/json" -X POST $FE/api/itineraries -d "$(body MDE 0)")" = 400 ]'
 sleep 10
 check "4a. Outbox PUBLISHED" '[ "$(db itinerary_db itinerary_user IPW "select status from outbox_events where aggregate_id='"'"'$ID'"'"'")" = PUBLISHED ]'
-check "4b. Notificacion SENT via RabbitMQ en ECS" 'curl -s "$GW/api/notifications/itinerary/$ID" | grep -q "\"status\":\"SENT\""'
+check "4b. Notificacion SENT via RabbitMQ en ECS" 'api "$FE/api/notifications/itinerary/$ID" | grep -q "\"status\":\"SENT\""'
 EVENT=$(db notification_db notification_user NPW "select event_id::text from notification_history where itinerary_id=$ID")
 python -c "import json; json.dump({'eventId':'$EVENT','eventType':'ItineraryCreatedEvent','occurredAt':'2026-10-13T00:00:00Z','itineraryId':$ID,'userName':'cloud-test','departureAirportId':'BOG','arrivalAirportId':'MDE','travelDate':'2026-12-20','durationMinutes':60}, open('event.json','w'))"
 aws_ lambda invoke --function-name SendNotificationFunction --cli-binary-format raw-in-base64-out \
@@ -202,32 +226,32 @@ AIRSVC=$(aws_ ecs list-services --cluster itinerarios-ecs --query "serviceArns[?
 aws_ ecs update-service --cluster itinerarios-ecs --service "$AIRSVC" --desired-count 0 >/dev/null
 aws_ ecs wait services-stable --cluster itinerarios-ecs --services "$AIRSVC"
 for i in 1 2 3; do post cloud-29-cb-$i "$(body PEI 60)" >/dev/null; done
-T0=$(date +%s%N); CODE=$(http -H 'Content-Type: application/json' -X POST "$GW/api/itineraries" -d "$(body PEI 60)"); MS=$(( ($(date +%s%N)-T0)/1000000 ))
+T0=$(date +%s%N); CODE=$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body PEI 60)"); MS=$(( ($(date +%s%N)-T0)/1000000 ))  # NOSONAR http de la demo (ADR-017)
 check "6a. Airport caido -> 503 y breaker abierto falla rapido (${MS} ms)" '[ "$CODE" = 503 ] && [ $MS -lt 2000 ]'
 aws_ ecs update-service --cluster itinerarios-ecs --service "$AIRSVC" --desired-count 1 >/dev/null
 aws_ ecs wait services-stable --cluster itinerarios-ecs --services "$AIRSVC"
 sleep 20
 # Airport recien creado arranca en frio (JIT + agente OTel con 0.25 vCPU): hasta ~5 min.
-for i in $(seq 1 30); do [ "$(http -H 'Content-Type: application/json' -X POST "$GW/api/itineraries" -d "$(body CLO 30)")" = 201 ] && break; sleep 10; done
-check "6b. Airport de vuelta -> breaker se recupera y POST 201" '[ "$(http -H "Content-Type: application/json" -X POST $GW/api/itineraries -d "$(body CLO 30)")" = 201 ]'
+for i in $(seq 1 30); do [[ "$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body CLO 30)")" = 201 ]] && break; sleep 10; done  # NOSONAR http de la demo (ADR-017)
+check "6b. Airport de vuelta -> breaker se recupera y POST 201" '[ "$(http -H "Content-Type: application/json" -X POST $FE/api/itineraries -d "$(body CLO 30)")" = 201 ]'
 
 STREAMS=$(MSYS_NO_PATHCONV=1 "$AWS" --region $REGION logs filter-log-events --log-group-name /ecs/itinerarios-ecs \
           --filter-pattern '"cloud-29-001"' --start-time "$TESTS_START_MS" --end-time "$(date +%s%3N)"           --max-items 50 --query 'events[].logStreamName' --output text | tr '\t' '\n' | cut -d/ -f2 | sort -u | tr '\n' ' ')
 check "7. Correlation ID cloud-29-001 en gateway, itinerary y airport [$STREAMS]" \
   'echo "$STREAMS" | grep -q gateway && echo "$STREAMS" | grep -q itinerary-service && echo "$STREAMS" | grep -q airport-service'
-check "8a. PUT -> 200" '[ "$(http -H "Content-Type: application/json" -X PUT $GW/api/itineraries/$ID -d "$(body MDE 90)")" = 200 ]'
-check "8b. DELETE -> 204" '[ "$(http -X DELETE $GW/api/itineraries/$ID)" = 204 ]'
+check "8a. PUT -> 200" '[ "$(http -H "Content-Type: application/json" -X PUT $FE/api/itineraries/$ID -d "$(body MDE 90)")" = 200 ]'
+check "8b. DELETE -> 204" '[ "$(http -X DELETE $FE/api/itineraries/$ID)" = 204 ]'
 
 # Selenium contra el frontend en ECS (nginx -> Gateway), con capturas de cada paso.
-FE="http://$(pubip FrontendService)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
 E2E_SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
 for i in $(seq 1 30); do [[ "$(http "$FE/")" = 200 ]] && break; sleep 10; done  # NOSONAR http de la demo (ADR-017)
-check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'  # NOSONAR http de la demo (ADR-017)
+check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.password="$(getp keycloak/e2e_user_password)" >>"$LOG" 2>&1)'  # NOSONAR http de la demo (ADR-017)
+rm -f "$JAR"
 log "Pruebas terminadas $(date +%T)"
 
 if [[ "$MODE" = keep ]]; then
   AIRIP=$(pubip AirportService); ITIP=$(pubip ItineraryService); NOIP=$(pubip NotificationService)
-  KCIP=$(pubip KeycloakService); GRIP=$(pubip GrafanaService); PRIP=$(pubip PrometheusService); JAIP=$(pubip JaegerService)
+  GRIP=$(pubip GrafanaService); PRIP=$(pubip PrometheusService); JAIP=$(pubip JaegerService)
   log ""; log "== URL de la demo (ENCENDIDO hasta: bash aws/run-cloud-tests.sh --down). Solo accesibles desde: $CIDR $CIDR2"  # NOSONAR http de la demo (ADR-017)
   log "Frontend            $FE/"  # NOSONAR http de la demo (ADR-017)
   log "Gateway (health)    $GW/actuator/health"  # NOSONAR http de la demo (ADR-017)
@@ -238,7 +262,7 @@ if [[ "$MODE" = keep ]]; then
   log "Prometheus alertas  http://$PRIP:9090/alerts"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Prometheus targets  http://$PRIP:9090/targets"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Jaeger              http://$JAIP:16686/search"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
-  log "Keycloak (cuenta)   http://$KCIP:8080/realms/itinerarios/account  (usuario/clave temporal: SSM /itinerarios/keycloak/test_user_*)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Keycloak (cuenta)   $FE/realms/itinerarios/account  (usuario/clave temporal: SSM /itinerarios/keycloak/test_user_*)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Capturas Selenium   $E2E_SHOTS"
 fi
 [ "$FAIL" = 0 ]

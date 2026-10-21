@@ -243,6 +243,8 @@ Resources:
             - { Name: REALM_JSON, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/realm' }
             - { Name: TEST_USER_EMAIL, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_email' }
             - { Name: TEST_USER_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_password' }
+            - { Name: TEST_USER_FIRST_NAME, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_first_name' }
+            - { Name: E2E_USER_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/e2e_user_password' }
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -391,6 +393,7 @@ Resources:
             - { Name: ITINERARY_SERVICE_URL, Value: 'http://itinerary.itinerarios.local:8082' }
             - { Name: NOTIFICATION_SERVICE_URL, Value: 'http://notification.itinerarios.local:8083' }
             - { Name: OAUTH2_TOKEN_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios/protocol/openid-connect/token' }
+            - { Name: KEYCLOAK_INTERNAL_URL, Value: 'http://keycloak.itinerarios.local:8080' }
           Secrets:
             - { Name: OAUTH2_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
           LogConfiguration:
@@ -415,9 +418,10 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-frontend:${ImageTag}'
           PortMappings: [{ ContainerPort: 80 }]
           Environment:
-            # nginx hace de proxy /api/ -> Gateway; resolver de la VPC para los nombres de Cloud Map.
+            # nginx: /api, login y logout -> Gateway; /realms -> Keycloak (mismo origen, ADR-018). Resolver de la VPC para Cloud Map.
             - { Name: GATEWAY_UPSTREAM, Value: 'http://gateway.itinerarios.local:8080' }
             - { Name: NGINX_RESOLVER, Value: 169.254.169.253 }
+            - { Name: KEYCLOAK_UPSTREAM, Value: 'http://keycloak.itinerarios.local:8080' }
           LogConfiguration:
             LogDriver: awslogs
             Options:
