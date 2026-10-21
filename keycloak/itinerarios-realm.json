@@ -2,7 +2,7 @@
   "realm": "itinerarios",
   "enabled": true,
   "accessTokenLifespan": 300,
-  "sslRequired": "external",
+  "sslRequired": "none",
   "clientScopes": [
     {
       "name": "airport.read",

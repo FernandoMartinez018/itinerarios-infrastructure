@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Paso 29 (seccion 111): pruebas cloud integradas. Enciende todo, prueba y APAGA SIEMPRE
 # (trap EXIT), porque la cuenta no tiene creditos (ADR-017). Termina con un inventario.
+# Paso 32 (demo de entrega): --keep NO apaga e imprime las URL; --down solo apaga.
 #
 # Requisitos: AWS CLI v2 con sesion (aws login), gh autenticado, Python 3 con psycopg,
-# Maven (para el ZIP de la Lambda). Uso, desde itinerarios-infrastructure:
-#   bash aws/run-cloud-tests.sh [archivo-de-log]
+# Maven (Lambda y Selenium), Chrome. Uso, desde itinerarios-infrastructure:
+#   bash aws/run-cloud-tests.sh [--keep|--down] [archivo-de-log]
 set -uo pipefail
+MODE=test; case "${1:-}" in --keep|--down) MODE="${1#--}"; shift;; esac
 
 REGION=us-east-1
 AWS="${AWS_CLI:-aws}"
@@ -43,7 +45,8 @@ teardown() {
        /itinerarios/db/notification_password /itinerarios/rabbitmq/password /itinerarios/db/keycloak_password \
        /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/oauth2/gateway_secret \
        /itinerarios/oauth2/itinerary_secret /itinerarios/keycloak/test_user_email \
-       /itinerarios/keycloak/test_user_password >/dev/null 2>&1
+       /itinerarios/keycloak/test_user_password /itinerarios/grafana/admin_password >/dev/null 2>&1
+  ssm_ delete-parameters --names /itinerarios/observability/prometheus_yml /itinerarios/observability/alert_rules        /itinerarios/observability/grafana_datasources /itinerarios/observability/grafana_dashboards        /itinerarios/observability/grafana_dashboard_json >/dev/null 2>&1
   for r in airport-service itinerary-service notification gateway frontend; do
     ids=$(aws_ ecr list-images --repository-name itinerarios-$r --query "imageIds[].imageDigest" --output text | tr '\t' '\n' | sort -u | sed 's/^/imageDigest=/' | tr '\n' ' ')
     [ -n "$ids" ] && aws_ ecr batch-delete-image --repository-name itinerarios-$r --image-ids $ids >/dev/null
@@ -54,9 +57,11 @@ teardown() {
   log "IPv4=[$(aws_ ec2 describe-network-interfaces --query 'NetworkInterfaces[?Association.PublicIp].Association.PublicIp' --output text)] SSM=[$(ssm_ describe-parameters --query 'Parameters[].Name' --output text)] Secrets=[$(aws_ secretsmanager list-secrets --query 'SecretList[].Name' --output text)] SG-externo=[$(aws_ ec2 describe-security-groups --query 'SecurityGroups[].IpPermissions[].IpRanges[].CidrIp' --output text)]"
   log "Resultado: $PASS OK, $FAIL fallas"
 }
-trap teardown EXIT
+[ "$MODE" = down ] && { teardown; exit 0; }
+# En --keep un fallo deja lo encendido a proposito: se apaga con --down cuando el usuario lo ordene.
+[ "$MODE" = test ] && trap teardown EXIT
 
-log "# Paso 29 - Pruebas cloud integradas ($(date '+%F %T'))"
+log "# Paso 29/32 - Pruebas cloud integradas, modo $MODE ($(date '+%F %T'))"
 # ---------------------------------------------------------------- encendido
 # IPs de salida: la red puede balancear entre 2 ISP (HTTPS y TCP salen por enlaces distintos).
 IPS=$( { for i in 1 2 3 4 5 6; do curl -s --max-time 10 https://checkip.amazonaws.com
@@ -70,7 +75,7 @@ log "Rangos admin detectados: $N"
 deploy itinerarios-network 03-network.yaml --parameter-overrides AdminCidr="$CIDR" AdminCidr2="$CIDR2"
 for p in db/airport_password db/itinerary_password db/notification_password rabbitmq/password \
          db/keycloak_password keycloak/admin_password oauth2/gateway_secret oauth2/itinerary_secret \
-         keycloak/test_user_password; do
+         keycloak/test_user_password grafana/admin_password; do
   ssm_ put-parameter --name "/itinerarios/$p" --type SecureString --overwrite \
        --value "$(python -c 'import secrets; print(secrets.token_urlsafe(24))')" >/dev/null
 done
@@ -83,11 +88,20 @@ ssm_ put-parameter --name /itinerarios/keycloak/realm --type String --overwrite 
 TEST_USER_EMAIL="${TEST_USER_EMAIL:-$(grep -E '^TEST_USER_EMAIL=' "$HERE/../.env" 2>/dev/null | cut -d= -f2-)}"
 ssm_ put-parameter --name /itinerarios/keycloak/test_user_email --type String --overwrite \
      --value "${TEST_USER_EMAIL:-tester@itinerarios.local}" >/dev/null
+# Configuracion de observabilidad (sin secretos) que las tareas ECS escriben a disco al arrancar.
+OBS="$HERE/../observability"
+for kv in prometheus_yml=aws/prometheus.yml alert_rules=alert-rules.yml grafana_datasources=aws/grafana-datasources.yaml           grafana_dashboards=aws/grafana-dashboards.yaml grafana_dashboard_json=dashboards/itinerarios-overview.json; do
+  # SSM rechaza "{{" en valores: se sube como <% %> y la tarea ECS lo restaura con sed.
+  sed 's/{{/<%/g; s/}}/%>/g' "$OBS/${kv#*=}" > obs.tmp
+  ssm_ put-parameter --name "/itinerarios/observability/${kv%%=*}" --type String --overwrite        --value "file://$(winpath "$PWD/obs.tmp")" >/dev/null || exit 1
+done
+rm -f obs.tmp
 getp() { ssm_ get-parameter --name "/itinerarios/$1" --with-decryption --query Parameter.Value --output text; }
 
-# Imagenes: se regeneran re-ejecutando el CI de main (push-image por OIDC).
+# Imagenes: si falta :latest en ECR se regenera re-ejecutando el CI de main (push-image por OIDC).
 declare -A RUN
-for r in airport-service itinerary-service notification gateway; do
+for r in airport-service itinerary-service notification gateway frontend; do
+  aws_ ecr describe-images --repository-name itinerarios-$r --image-ids imageTag=latest >/dev/null 2>&1 && continue
   RUN[$r]=$("$GH" run list -R $OWNER/itinerarios-$r -b main -w CI -L 1 --json databaseId --jq '.[0].databaseId')
   "$GH" run rerun "${RUN[$r]}" -R $OWNER/itinerarios-$r >/dev/null
 done
@@ -135,10 +149,15 @@ done
 deploy itinerarios-ecs 05-ecs.yaml --capabilities CAPABILITY_IAM --parameter-overrides AdminCidr="$CIDR" AdminCidr2="$CIDR2" ImageTag=latest || exit 1
 deploy itinerarios-lambda 06-lambda.yaml --capabilities CAPABILITY_IAM --parameter-overrides CodeBucket="$BUCKET" DbPassword="$NPW" || exit 1
 
-SVC=$(aws_ ecs list-services --cluster itinerarios-ecs --query "serviceArns[?contains(@,'Gateway')]" --output text)
-TASK=$(aws_ ecs list-tasks --cluster itinerarios-ecs --service-name "$SVC" --query "taskArns[0]" --output text)
-ENI=$(aws_ ecs describe-tasks --cluster itinerarios-ecs --tasks "$TASK" --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text)
-GW="http://$(aws_ ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text):8080"
+# IP publica de la tarea de un servicio ECS (sin ALB, ADR-017): pubip GatewayService
+pubip() {
+  local svc task eni
+  svc=$(aws_ ecs list-services --cluster itinerarios-ecs --query "serviceArns[?contains(@,'$1')]" --output text)
+  task=$(aws_ ecs list-tasks --cluster itinerarios-ecs --service-name "$svc" --query "taskArns[0]" --output text)
+  eni=$(aws_ ecs describe-tasks --cluster itinerarios-ecs --tasks "$task" --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text)
+  aws_ ec2 describe-network-interfaces --network-interface-ids "$eni" --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+}
+GW="http://$(pubip GatewayService):8080"
 for i in $(seq 1 60); do curl -sf --max-time 5 "$GW/actuator/health" >/dev/null && break; sleep 5; done
 # Gateway UP no basta: Airport/Itinerary/Notification arrancan Spring + Flyway contra RDS.
 # Un fallo temprano abriria el Circuit Breaker y contaminaria las pruebas.
@@ -197,5 +216,28 @@ check "7. Correlation ID cloud-29-001 en gateway, itinerary y airport [$STREAMS]
   'echo "$STREAMS" | grep -q gateway && echo "$STREAMS" | grep -q itinerary-service && echo "$STREAMS" | grep -q airport-service'
 check "8a. PUT -> 200" '[ "$(http -H "Content-Type: application/json" -X PUT $GW/api/itineraries/$ID -d "$(body MDE 90)")" = 200 ]'
 check "8b. DELETE -> 204" '[ "$(http -X DELETE $GW/api/itineraries/$ID)" = 204 ]'
+
+# Selenium contra el frontend en ECS (nginx -> Gateway), con capturas de cada paso.
+FE="http://$(pubip FrontendService)"
+E2E_SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
+for i in $(seq 1 30); do [ "$(http "$FE/")" = 200 ] && break; sleep 10; done
+check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'
 log "Pruebas terminadas $(date +%T)"
+
+if [ "$MODE" = keep ]; then
+  AIRIP=$(pubip AirportService); ITIP=$(pubip ItineraryService); NOIP=$(pubip NotificationService)
+  KCIP=$(pubip KeycloakService); GRIP=$(pubip GrafanaService); PRIP=$(pubip PrometheusService); JAIP=$(pubip JaegerService)
+  log ""; log "== URL de la demo (ENCENDIDO hasta: bash aws/run-cloud-tests.sh --down). Solo accesibles desde: $CIDR $CIDR2"
+  log "Frontend            $FE/"
+  log "Gateway (health)    $GW/actuator/health"
+  log "Swagger Airport     http://$AIRIP:8081/swagger-ui.html"
+  log "Swagger Itinerary   http://$ITIP:8082/swagger-ui.html"
+  log "Swagger Notif.      http://$NOIP:8083/swagger-ui.html"
+  log "Grafana dashboard   http://$GRIP:3000/d/itinerarios-overview  (anonimo lectura; admin: SSM /itinerarios/grafana/admin_password)"
+  log "Prometheus alertas  http://$PRIP:9090/alerts"
+  log "Prometheus targets  http://$PRIP:9090/targets"
+  log "Jaeger              http://$JAIP:16686/search"
+  log "Keycloak (cuenta)   http://$KCIP:8080/realms/itinerarios/account  (usuario/clave temporal: SSM /itinerarios/keycloak/test_user_*)"
+  log "Capturas Selenium   $E2E_SHOTS"
+fi
 [ "$FAIL" = 0 ]

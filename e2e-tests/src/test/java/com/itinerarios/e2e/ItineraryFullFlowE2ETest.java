@@ -60,9 +60,12 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         driver.get(BASE_URL + "/login");
         WebElement userNameInput = wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("userName")));
         userNameInput.sendKeys(TEST_USER);
+        capture("login");
         driver.findElement(By.cssSelector("form button[type='submit']")).click();
 
         wait.until(ExpectedConditions.urlContains("/dashboard"));
+        settle(1500);
+        capture("dashboard");
     }
 
     private void loadAirportsAndVerifyMap() {
@@ -75,6 +78,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         // verifica que la pantalla (y su contenedor de mapa) cargó sin error.
         wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("h1")));
         assertTrue(driver.findElement(By.cssSelector("h1")).getText().contains("Aeropuertos"));
+        settle(3000); // Plotly se carga de forma diferida
+        capture("aeropuertos-y-mapa");
     }
 
     private void createItinerary() {
@@ -95,6 +100,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         WebElement durationInput = driver.findElement(By.id("durationMinutes"));
         durationInput.clear();
         durationInput.sendKeys("90");
+        settle(800);
+        capture("formulario-nuevo-itinerario");
 
         driver.findElement(By.cssSelector("form button[type='submit']")).click();
 
@@ -112,6 +119,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
                 "//tr[td[text()='%s'] and td[text()='%s']]", DEPARTURE_IATA, ARRIVAL_IATA);
 
         wait.until(ExpectedConditions.presenceOfElementLocated(By.xpath(rowSelector)));
+        settle(800);
+        capture("itinerario-creado-en-la-lista");
         return rowSelector;
     }
 
@@ -123,6 +132,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
                 ExpectedConditions.visibilityOfElementLocated(By.id("durationMinutes")));
         durationInput.clear();
         durationInput.sendKeys("120");
+        settle(500);
+        capture("edicion-duracion-120");
 
         driver.findElement(By.cssSelector("form button[type='submit']")).click();
         wait.until(ExpectedConditions.urlMatches("/itineraries$")); // lista, no /new ni /edit
@@ -131,6 +142,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
                 "//tr[td[text()='%s'] and td[text()='%s'] and td[text()='120']]",
                 DEPARTURE_IATA, ARRIVAL_IATA);
         wait.until(ExpectedConditions.presenceOfElementLocated(By.xpath(updatedRowSelector)));
+        settle(500);
+        capture("itinerario-editado");
     }
 
     private void deleteItinerary() {
@@ -144,6 +157,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         driver.switchTo().alert().accept();
 
         wait.until(ExpectedConditions.invisibilityOfElementLocated(By.xpath(updatedRowSelector)));
+        settle(800);
+        capture("itinerario-eliminado");
     }
 
     /** Espera (Outbox poll + RabbitMQ) a que aparezca una notificacion SENT nueva para el usuario de prueba. */
