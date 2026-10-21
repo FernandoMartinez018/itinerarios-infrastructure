@@ -157,7 +157,7 @@ pubip() {
   eni=$(aws_ ecs describe-tasks --cluster itinerarios-ecs --tasks "$task" --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text)
   aws_ ec2 describe-network-interfaces --network-interface-ids "$eni" --query 'NetworkInterfaces[0].Association.PublicIp' --output text
 }
-GW="http://$(pubip GatewayService):8080"
+GW="http://$(pubip GatewayService):8080"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
 for i in $(seq 1 60); do curl -sf --max-time 5 "$GW/actuator/health" >/dev/null && break; sleep 5; done
 # Gateway UP no basta: Airport/Itinerary/Notification arrancan Spring + Flyway contra RDS.
 # Un fallo temprano abriria el Circuit Breaker y contaminaria las pruebas.
@@ -218,7 +218,7 @@ check "8a. PUT -> 200" '[ "$(http -H "Content-Type: application/json" -X PUT $GW
 check "8b. DELETE -> 204" '[ "$(http -X DELETE $GW/api/itineraries/$ID)" = 204 ]'
 
 # Selenium contra el frontend en ECS (nginx -> Gateway), con capturas de cada paso.
-FE="http://$(pubip FrontendService)"
+FE="http://$(pubip FrontendService)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
 E2E_SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
 for i in $(seq 1 30); do [[ "$(http "$FE/")" = 200 ]] && break; sleep 10; done
 check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'
