@@ -1,0 +1,25 @@
+# Prometheus en AWS (paso 32): mismos jobs que en Compose, con nombres de Cloud Map.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /tmp/prom/alert-rules.yml
+
+scrape_configs:
+  - job_name: airport-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["airport.itinerarios.local:8081"]
+  - job_name: itinerary-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["itinerary.itinerarios.local:8082"]
+  - job_name: notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["notification.itinerarios.local:8083"]
+  - job_name: gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["gateway.itinerarios.local:8080"]

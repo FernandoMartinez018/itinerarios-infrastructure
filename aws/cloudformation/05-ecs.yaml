@@ -4,7 +4,7 @@ Description: >
   Un servicio por microservicio + RabbitMQ y Redis como contenedores (ADR-017: Amazon MQ
   minimo ~USD 100/mes). Descubrimiento por Cloud Map DNS privado. Sin NAT ni ALB: tareas
   con IP publica solo para salir a ECR/API Colombia; unicamente el Gateway acepta trafico
-  externo y solo desde AdminCidr. Disenado para encender, probar y borrar (cuenta sin creditos).
+  externo, solo desde AdminCidr. Paso 32: + frontend, Keycloak, Prometheus, Grafana y Jaeger para la demo.
 
 Metadata:
   AWSToolsMetrics:
@@ -59,25 +59,77 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: Unico punto de entrada externo (seccion 33).
+        why: Acceso de demo/entrega (paso 32) a frontend, Gateway, Swagger, Keycloak, Grafana, Prometheus y Jaeger.
         must:
-          - Ingreso 8080 solo desde AdminCidr; nunca 0.0.0.0/0.
+          - Solo desde AdminCidr/AdminCidr2; nunca 0.0.0.0/0 (seccion 57).
     Properties:
-      GroupDescription: Gateway - entrada externa restringida
+      GroupDescription: Demo - UI y herramientas restringidas a las IPs del admin
       VpcId: !ImportValue { 'Fn::Sub': '${NetworkStackName}-VpcId' }
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
+          FromPort: 80
+          ToPort: 80
           CidrIp: !Ref AdminCidr
-          Description: Admin (pruebas)
+          Description: Frontend (admin)
+        - !If
+          - HasAdminCidr2
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            CidrIp: !Ref AdminCidr2
+            Description: Frontend (admin, segundo enlace)
+          - !Ref AWS::NoValue
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AdminCidr
+          Description: Grafana (admin)
+        - !If
+          - HasAdminCidr2
+          - IpProtocol: tcp
+            FromPort: 3000
+            ToPort: 3000
+            CidrIp: !Ref AdminCidr2
+            Description: Grafana (admin, segundo enlace)
+          - !Ref AWS::NoValue
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8083
+          CidrIp: !Ref AdminCidr
+          Description: Gateway/Keycloak/Swagger (admin)
         - !If
           - HasAdminCidr2
           - IpProtocol: tcp
             FromPort: 8080
-            ToPort: 8080
+            ToPort: 8083
             CidrIp: !Ref AdminCidr2
-            Description: Admin (pruebas, segundo enlace)
+            Description: Gateway/Keycloak/Swagger (admin, segundo enlace)
+          - !Ref AWS::NoValue
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: !Ref AdminCidr
+          Description: Prometheus (admin)
+        - !If
+          - HasAdminCidr2
+          - IpProtocol: tcp
+            FromPort: 9090
+            ToPort: 9090
+            CidrIp: !Ref AdminCidr2
+            Description: Prometheus (admin, segundo enlace)
+          - !Ref AWS::NoValue
+        - IpProtocol: tcp
+          FromPort: 16686
+          ToPort: 16686
+          CidrIp: !Ref AdminCidr
+          Description: Jaeger UI (admin)
+        - !If
+          - HasAdminCidr2
+          - IpProtocol: tcp
+            FromPort: 16686
+            ToPort: 16686
+            CidrIp: !Ref AdminCidr2
+            Description: Jaeger UI (admin, segundo enlace)
           - !Ref AWS::NoValue
 
   ExecutionRole:
@@ -177,8 +229,9 @@ Resources:
                 - 'jdbc:postgresql://${Host}:5432/keycloak_db'
                 - Host: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' }
             - { Name: KC_DB_USERNAME, Value: keycloak_user }
-            # Emisor fijo = nombre en Cloud Map, igual al que validan los servicios.
-            - { Name: KC_HOSTNAME, Value: 'http://keycloak.itinerarios.local:8080' }
+            # Hostname dinamico: los servicios piden tokens a keycloak.itinerarios.local (iss igual al
+            # que validan) y la consola responde por la IP publica de la demo. Sin TLS: solo demo.
+            - { Name: KC_HOSTNAME_STRICT, Value: 'false' }
             - { Name: KC_HTTP_ENABLED, Value: 'true' }
             - { Name: KC_HEALTH_ENABLED, Value: 'true' }
             - { Name: KC_BOOTSTRAP_ADMIN_USERNAME, Value: admin }
@@ -213,6 +266,12 @@ Resources:
           PortMappings: [{ ContainerPort: 8081 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: JAVA_TOOL_OPTIONS, Value: '-javaagent:/app/opentelemetry-javaagent.jar' }
+            - { Name: OTEL_SERVICE_NAME, Value: airport-service }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: 'http://jaeger.itinerarios.local:4317' }
+            - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: grpc }
+            - { Name: OTEL_METRICS_EXPORTER, Value: none }
+            - { Name: OTEL_LOGS_EXPORTER, Value: none }
             - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
             - { Name: DB_PORT, Value: '5432' }
@@ -244,6 +303,12 @@ Resources:
           PortMappings: [{ ContainerPort: 8082 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: JAVA_TOOL_OPTIONS, Value: '-javaagent:/app/opentelemetry-javaagent.jar' }
+            - { Name: OTEL_SERVICE_NAME, Value: itinerary-service }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: 'http://jaeger.itinerarios.local:4317' }
+            - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: grpc }
+            - { Name: OTEL_METRICS_EXPORTER, Value: none }
+            - { Name: OTEL_LOGS_EXPORTER, Value: none }
             - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
             - { Name: OAUTH2_TOKEN_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios/protocol/openid-connect/token' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
@@ -279,6 +344,12 @@ Resources:
           PortMappings: [{ ContainerPort: 8083 }]
           Environment:
             - { Name: SPRING_PROFILES_ACTIVE, Value: prod }
+            - { Name: JAVA_TOOL_OPTIONS, Value: '-javaagent:/app/opentelemetry-javaagent.jar' }
+            - { Name: OTEL_SERVICE_NAME, Value: notification-service }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: 'http://jaeger.itinerarios.local:4317' }
+            - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: grpc }
+            - { Name: OTEL_METRICS_EXPORTER, Value: none }
+            - { Name: OTEL_LOGS_EXPORTER, Value: none }
             - { Name: OAUTH2_ISSUER_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios' }
             - { Name: DB_HOST, Value: !ImportValue { 'Fn::Sub': '${RdsStackName}-Endpoint' } }
             - { Name: DB_PORT, Value: '5432' }
@@ -311,11 +382,127 @@ Resources:
           PortMappings: [{ ContainerPort: 8080 }]
           Environment:
             - { Name: AIRPORT_SERVICE_URL, Value: 'http://airport.itinerarios.local:8081' }
+            - { Name: JAVA_TOOL_OPTIONS, Value: '-javaagent:/app/opentelemetry-javaagent.jar' }
+            - { Name: OTEL_SERVICE_NAME, Value: gateway }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: 'http://jaeger.itinerarios.local:4317' }
+            - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: grpc }
+            - { Name: OTEL_METRICS_EXPORTER, Value: none }
+            - { Name: OTEL_LOGS_EXPORTER, Value: none }
             - { Name: ITINERARY_SERVICE_URL, Value: 'http://itinerary.itinerarios.local:8082' }
             - { Name: NOTIFICATION_SERVICE_URL, Value: 'http://notification.itinerarios.local:8083' }
             - { Name: OAUTH2_TOKEN_URI, Value: 'http://keycloak.itinerarios.local:8080/realms/itinerarios/protocol/openid-connect/token' }
           Secrets:
             - { Name: OAUTH2_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ---------- Frontend y observabilidad (paso 32: entrega con URLs) ----------
+  FrontendTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-frontend'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/itinerarios-frontend:${ImageTag}'
+          PortMappings: [{ ContainerPort: 80 }]
+          Environment:
+            # nginx hace de proxy /api/ -> Gateway; resolver de la VPC para los nombres de Cloud Map.
+            - { Name: GATEWAY_UPSTREAM, Value: 'http://gateway.itinerarios.local:8080' }
+            - { Name: NGINX_RESOLVER, Value: 169.254.169.253 }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  JaegerTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-jaeger'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: jaeger
+          # Recibe OTLP directo de los agentes (sin otel-collector en AWS: un contenedor menos).
+          Image: jaegertracing/all-in-one:1.76.0
+          PortMappings: [{ ContainerPort: 16686 }, { ContainerPort: 4317 }]
+          Environment:
+            - { Name: COLLECTOR_OTLP_ENABLED, Value: 'true' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  PrometheusTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-prometheus'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: prometheus
+          Image: prom/prometheus:v3.0.1
+          PortMappings: [{ ContainerPort: 9090 }]
+          # Sin volumenes en Fargate: config y reglas llegan por SSM y se escriben al arrancar.
+          # SSM no admite "{{" en valores: el script los sube como <% %> y sed los restaura.
+          EntryPoint: ['/bin/sh', '-c']
+          Command:
+            - 'mkdir -p /tmp/prom && printf "%s" "$PROM_CONFIG" > /tmp/prom/prometheus.yml && printf "%s" "$ALERT_RULES" | sed "s/<%/{{/g; s/%>/}}/g" > /tmp/prom/alert-rules.yml && exec /bin/prometheus --config.file=/tmp/prom/prometheus.yml --storage.tsdb.path=/prometheus'
+          Secrets:
+            - { Name: PROM_CONFIG, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/observability/prometheus_yml' }
+            - { Name: ALERT_RULES, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/observability/alert_rules' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  GrafanaTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-grafana'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: grafana
+          Image: grafana/grafana:11.4.0
+          PortMappings: [{ ContainerPort: 3000 }]
+          EntryPoint: ['/bin/sh', '-c']
+          Command:
+            - 'mkdir -p /tmp/prov/datasources /tmp/prov/dashboards /tmp/dashboards && printf "%s" "$GRAFANA_DS" > /tmp/prov/datasources/ds.yaml && printf "%s" "$GRAFANA_PROVIDER" > /tmp/prov/dashboards/provider.yaml && printf "%s" "$GRAFANA_DASHBOARD" | sed "s/<%/{{/g; s/%>/}}/g" > /tmp/dashboards/itinerarios-overview.json && exec /run.sh'
+          Environment:
+            - { Name: GF_PATHS_PROVISIONING, Value: /tmp/prov }
+            - { Name: GF_SECURITY_ADMIN_USER, Value: admin }
+            # Solo lectura sin login para los evaluadores (el SG ya limita el acceso a las IPs del admin).
+            - { Name: GF_AUTH_ANONYMOUS_ENABLED, Value: 'true' }
+            - { Name: GF_AUTH_ANONYMOUS_ORG_ROLE, Value: Viewer }
+          Secrets:
+            - { Name: GF_SECURITY_ADMIN_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/grafana/admin_password' }
+            - { Name: GRAFANA_DS, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/observability/grafana_datasources' }
+            - { Name: GRAFANA_PROVIDER, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/observability/grafana_dashboards' }
+            - { Name: GRAFANA_DASHBOARD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/observability/grafana_dashboard_json' }
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -367,6 +554,28 @@ Resources:
       DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
       HealthCheckCustomConfig: { FailureThreshold: 1 }
 
+  GatewayDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: gateway
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  JaegerDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: jaeger
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+  PrometheusDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: prometheus
+      NamespaceId: !Ref Namespace
+      DnsConfig: { DnsRecords: [{ Type: A, TTL: 10 }] }
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+
   RabbitService:
     Type: AWS::ECS::Service
     Properties:
@@ -406,7 +615,9 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
           Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
-          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
   ItineraryService:
     Type: AWS::ECS::Service
     DependsOn: [RabbitService, AirportService]
@@ -420,7 +631,9 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
           Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
-          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
   NotificationService:
     Type: AWS::ECS::Service
     DependsOn: RabbitService
@@ -434,7 +647,9 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED   # sin NAT: salida a ECR por IP publica; SG sin ingreso externo
           Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
-          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
   KeycloakService:
     Type: AWS::ECS::Service
     Properties:
@@ -447,7 +662,9 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED   # sin NAT: salida a quay.io por IP publica; SG sin ingreso externo
           Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
-          SecurityGroups: [!ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
   GatewayService:
     Type: AWS::ECS::Service
     DependsOn: [AirportService, ItineraryService, NotificationService, KeycloakService]
@@ -456,6 +673,68 @@ Resources:
       LaunchType: FARGATE
       DesiredCount: 1
       TaskDefinition: !Ref GatewayTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt GatewayDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
+
+  JaegerService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref JaegerTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt JaegerDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
+  PrometheusService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref PrometheusTask
+      ServiceRegistries: [{ RegistryArn: !GetAtt PrometheusDiscovery.Arn }]
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
+  GrafanaService:
+    Type: AWS::ECS::Service
+    DependsOn: PrometheusService
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref GrafanaTask
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue { 'Fn::Sub': '${NetworkStackName}-PublicSubnetIds' }]
+          SecurityGroups:
+            - !ImportValue { 'Fn::Sub': '${NetworkStackName}-AppSecurityGroupId' }
+            - !Ref GatewaySecurityGroup
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: GatewayService
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref FrontendTask
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
