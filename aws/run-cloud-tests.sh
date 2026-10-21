@@ -173,20 +173,20 @@ kc_login() {
   local form action next
   rm -f "$JAR"
   form=$(curl -s -L --max-time 30 -b "$JAR" -c "$JAR" "$FE/oauth2/authorization/keycloak")
-  action=$(echo "$form" | grep -oE 'id="kc-form-login"[^>]*action="[^"]+"|action="[^"]+"[^>]*id="kc-form-login"' | grep -oE 'action="[^"]+"' | sed 's/action="//;s/"$//;s/&amp;/\&/g')
-  [ -n "$action" ] || return 1
+  action=$(echo "$form" | grep -oE 'id="kc-form-login"[^>]*action="[^"]+"|action="[^"]+"[^>]*id="kc-form-login"' | grep -oE 'action="[^"]+"' | sed 's/action="//;s/"$//;s/&amp;/\&/g')  # NOSONAR http de la demo (ADR-017)
+  [[ -n "$action" ]] || return 1
   next=$(curl -s --max-time 30 -b "$JAR" -c "$JAR" -o /dev/null -w '%{redirect_url}' \
-         --data-urlencode username=e2e --data-urlencode "password=$(getp keycloak/e2e_user_password)" "$action")
-  curl -s --max-time 30 -b "$JAR" -c "$JAR" -o /dev/null "$next"
-  [ "$(api -o /dev/null -w '%{http_code}' "$FE/auth/me")" = 200 ]
+         --data-urlencode username=e2e --data-urlencode "password=$(getp keycloak/e2e_user_password)" "$action")  # NOSONAR http de la demo (ADR-017)
+  curl -s --max-time 30 -b "$JAR" -c "$JAR" -o /dev/null "$next"  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' "$FE/auth/me")" = 200 ]]  # NOSONAR http de la demo (ADR-017)
 }
 for i in $(seq 1 60); do kc_login && break; sleep 10; done
 # Gateway UP no basta: Airport/Itinerary/Notification arrancan Spring + Flyway contra RDS.
 # Un fallo temprano abriria el Circuit Breaker y contaminaria las pruebas.
 for i in $(seq 1 60); do
-  [ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/airports/iata/MDE")" = 200 ] &&
-  [ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/itineraries")" = 200 ] &&
-  [ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/notifications")" = 200 ] && break
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/airports/iata/MDE")" = 200 ]] &&  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/itineraries")" = 200 ]] &&  # NOSONAR http de la demo (ADR-017)
+  [[ "$(api -o /dev/null -w '%{http_code}' --max-time 20 "$FE/api/notifications")" = 200 ]] && break  # NOSONAR http de la demo (ADR-017)
   sleep 10
 done
 log "Todo encendido y listo $(date +%T)"
@@ -194,7 +194,7 @@ log "Todo encendido y listo $(date +%T)"
 # ---------------------------------------------------------------- pruebas
 http() { api -o /dev/null -w '%{http_code}' "$@"; }
 body() { echo "{\"userName\":\"cloud-test\",\"departureAirportId\":\"BOG\",\"arrivalAirportId\":\"$1\",\"travelDate\":\"2026-12-20\",\"durationMinutes\":$2}"; }
-post() { api -H 'Content-Type: application/json' -H "X-Correlation-ID: $1" -X POST "$FE/api/itineraries" -d "$2"; }
+post() { api -H 'Content-Type: application/json' -H "X-Correlation-ID: $1" -X POST "$FE/api/itineraries" -d "$2"; }  # NOSONAR http de la demo (ADR-017)
 db() { python -c "
 import os, sys, psycopg
 with psycopg.connect(host=os.environ['EP'], dbname=sys.argv[1], user=sys.argv[2], password=os.environ[sys.argv[3]], sslmode='require') as c:
@@ -205,7 +205,7 @@ TESTS_START_MS=$(( $(date +%s) * 1000 - 60000 ))  # ventana acotada para CloudWa
 check "1. Gateway health UP" 'curl -s --max-time 10 $GW/actuator/health | grep -q "\"status\":\"UP\""'
 check "1b. API sin sesion -> 401 y login Keycloak (usuario e2e) -> /auth/me 200" \
   '[ "$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 $FE/api/itineraries)" = 401 ] && api $FE/auth/me | grep -q "\"username\":\"e2e\""'
-AIR=$(api "$FE/api/airports/iata/BOG")
+AIR=$(api "$FE/api/airports/iata/BOG")  # NOSONAR http de la demo (ADR-017)
 check "2. BOG = El Dorado con coordenadas en Colombia" 'echo "$AIR" | python -c "import json,sys; a=json.load(sys.stdin); sys.exit(0 if a[\"icaoCode\"]==\"SKBO\" and -5<a[\"latitude\"]<14 and -82<a[\"longitude\"]<-66 else 1)"'
 CREATED=$(post cloud-29-001 "$(body MDE 60)"); ID=$(echo "$CREATED" | python -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
 check "3a. POST valido -> 201 (id=$ID)" '[ -n "$ID" ]'
@@ -226,13 +226,13 @@ AIRSVC=$(aws_ ecs list-services --cluster itinerarios-ecs --query "serviceArns[?
 aws_ ecs update-service --cluster itinerarios-ecs --service "$AIRSVC" --desired-count 0 >/dev/null
 aws_ ecs wait services-stable --cluster itinerarios-ecs --services "$AIRSVC"
 for i in 1 2 3; do post cloud-29-cb-$i "$(body PEI 60)" >/dev/null; done
-T0=$(date +%s%N); CODE=$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body PEI 60)"); MS=$(( ($(date +%s%N)-T0)/1000000 ))
+T0=$(date +%s%N); CODE=$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body PEI 60)"); MS=$(( ($(date +%s%N)-T0)/1000000 ))  # NOSONAR http de la demo (ADR-017)
 check "6a. Airport caido -> 503 y breaker abierto falla rapido (${MS} ms)" '[ "$CODE" = 503 ] && [ $MS -lt 2000 ]'
 aws_ ecs update-service --cluster itinerarios-ecs --service "$AIRSVC" --desired-count 1 >/dev/null
 aws_ ecs wait services-stable --cluster itinerarios-ecs --services "$AIRSVC"
 sleep 20
 # Airport recien creado arranca en frio (JIT + agente OTel con 0.25 vCPU): hasta ~5 min.
-for i in $(seq 1 30); do [ "$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body CLO 30)")" = 201 ] && break; sleep 10; done
+for i in $(seq 1 30); do [[ "$(http -H 'Content-Type: application/json' -X POST "$FE/api/itineraries" -d "$(body CLO 30)")" = 201 ]] && break; sleep 10; done  # NOSONAR http de la demo (ADR-017)
 check "6b. Airport de vuelta -> breaker se recupera y POST 201" '[ "$(http -H "Content-Type: application/json" -X POST $FE/api/itineraries -d "$(body CLO 30)")" = 201 ]'
 
 STREAMS=$(MSYS_NO_PATHCONV=1 "$AWS" --region $REGION logs filter-log-events --log-group-name /ecs/itinerarios-ecs \
