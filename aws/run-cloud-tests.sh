@@ -17,7 +17,7 @@ OWNER=FernandoMartinez018
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CFN="$HERE/cloudformation"
 NOTIF="$HERE/../../itinerarios-notification"
-LOG="${1:-$HERE/cloud-tests-$(date +%Y%m%d-%H%M).log}"
+LOG="$(realpath -m "${1:-$HERE/cloud-tests-$(date +%Y%m%d-%H%M).log}")"  # absoluta: Selenium escribe tras un cd
 BUCKET="itinerarios-lambda-code-$("$AWS" sts get-caller-identity --query Account --output text)"
 PASS=0; FAIL=0
 
@@ -207,7 +207,8 @@ check "6a. Airport caido -> 503 y breaker abierto falla rapido (${MS} ms)" '[ "$
 aws_ ecs update-service --cluster itinerarios-ecs --service "$AIRSVC" --desired-count 1 >/dev/null
 aws_ ecs wait services-stable --cluster itinerarios-ecs --services "$AIRSVC"
 sleep 20
-for i in $(seq 1 12); do [ "$(http -H 'Content-Type: application/json' -X POST "$GW/api/itineraries" -d "$(body CLO 30)")" = 201 ] && break; sleep 10; done
+# Airport recien creado arranca en frio (JIT + agente OTel con 0.25 vCPU): hasta ~5 min.
+for i in $(seq 1 30); do [ "$(http -H 'Content-Type: application/json' -X POST "$GW/api/itineraries" -d "$(body CLO 30)")" = 201 ] && break; sleep 10; done
 check "6b. Airport de vuelta -> breaker se recupera y POST 201" '[ "$(http -H "Content-Type: application/json" -X POST $GW/api/itineraries -d "$(body CLO 30)")" = 201 ]'
 
 STREAMS=$(MSYS_NO_PATHCONV=1 "$AWS" --region $REGION logs filter-log-events --log-group-name /ecs/itinerarios-ecs \
