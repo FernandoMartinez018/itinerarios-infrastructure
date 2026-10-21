@@ -15,7 +15,7 @@ SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
 SUREFIRE="$HERE/../e2e-tests/target/surefire-reports"
 SITE="$(mktemp -d)"
 
-[ -n "$(ls "$SHOTS"/*.png 2>/dev/null)" ] || { echo "No hay capturas en $SHOTS: correr Selenium primero"; exit 1; }
+[[ -n "$(ls "$SHOTS"/*.png 2>/dev/null)" ]] || { echo "No hay capturas en $SHOTS: correr Selenium primero"; exit 1; }
 
 for r in airport-service itinerary-service notification gateway; do
   (cd "$ROOT/itinerarios-$r" && "$MVN" -B -ntp -q clean verify)

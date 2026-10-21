@@ -57,9 +57,9 @@ teardown() {
   log "IPv4=[$(aws_ ec2 describe-network-interfaces --query 'NetworkInterfaces[?Association.PublicIp].Association.PublicIp' --output text)] SSM=[$(ssm_ describe-parameters --query 'Parameters[].Name' --output text)] Secrets=[$(aws_ secretsmanager list-secrets --query 'SecretList[].Name' --output text)] SG-externo=[$(aws_ ec2 describe-security-groups --query 'SecurityGroups[].IpPermissions[].IpRanges[].CidrIp' --output text)]"
   log "Resultado: $PASS OK, $FAIL fallas"
 }
-[ "$MODE" = down ] && { teardown; exit 0; }
+[[ "$MODE" = down ]] && { teardown; exit 0; }
 # En --keep un fallo deja lo encendido a proposito: se apaga con --down cuando el usuario lo ordene.
-[ "$MODE" = test ] && trap teardown EXIT
+[[ "$MODE" = test ]] && trap teardown EXIT
 
 log "# Paso 29/32 - Pruebas cloud integradas, modo $MODE ($(date '+%F %T'))"
 # ---------------------------------------------------------------- encendido
@@ -220,24 +220,24 @@ check "8b. DELETE -> 204" '[ "$(http -X DELETE $GW/api/itineraries/$ID)" = 204 ]
 # Selenium contra el frontend en ECS (nginx -> Gateway), con capturas de cada paso.
 FE="http://$(pubip FrontendService)"
 E2E_SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
-for i in $(seq 1 30); do [ "$(http "$FE/")" = 200 ] && break; sleep 10; done
+for i in $(seq 1 30); do [[ "$(http "$FE/")" = 200 ]] && break; sleep 10; done
 check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'
 log "Pruebas terminadas $(date +%T)"
 
-if [ "$MODE" = keep ]; then
+if [[ "$MODE" = keep ]]; then
   AIRIP=$(pubip AirportService); ITIP=$(pubip ItineraryService); NOIP=$(pubip NotificationService)
   KCIP=$(pubip KeycloakService); GRIP=$(pubip GrafanaService); PRIP=$(pubip PrometheusService); JAIP=$(pubip JaegerService)
   log ""; log "== URL de la demo (ENCENDIDO hasta: bash aws/run-cloud-tests.sh --down). Solo accesibles desde: $CIDR $CIDR2"
   log "Frontend            $FE/"
   log "Gateway (health)    $GW/actuator/health"
-  log "Swagger Airport     http://$AIRIP:8081/swagger-ui.html"
-  log "Swagger Itinerary   http://$ITIP:8082/swagger-ui.html"
-  log "Swagger Notif.      http://$NOIP:8083/swagger-ui.html"
-  log "Grafana dashboard   http://$GRIP:3000/d/itinerarios-overview  (anonimo lectura; admin: SSM /itinerarios/grafana/admin_password)"
-  log "Prometheus alertas  http://$PRIP:9090/alerts"
-  log "Prometheus targets  http://$PRIP:9090/targets"
-  log "Jaeger              http://$JAIP:16686/search"
-  log "Keycloak (cuenta)   http://$KCIP:8080/realms/itinerarios/account  (usuario/clave temporal: SSM /itinerarios/keycloak/test_user_*)"
+  log "Swagger Airport     http://$AIRIP:8081/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Swagger Itinerary   http://$ITIP:8082/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Swagger Notif.      http://$NOIP:8083/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Grafana dashboard   http://$GRIP:3000/d/itinerarios-overview  (anonimo lectura; admin: SSM /itinerarios/grafana/admin_password)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Prometheus alertas  http://$PRIP:9090/alerts"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Prometheus targets  http://$PRIP:9090/targets"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Jaeger              http://$JAIP:16686/search"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
+  log "Keycloak (cuenta)   http://$KCIP:8080/realms/itinerarios/account  (usuario/clave temporal: SSM /itinerarios/keycloak/test_user_*)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Capturas Selenium   $E2E_SHOTS"
 fi
 [ "$FAIL" = 0 ]
