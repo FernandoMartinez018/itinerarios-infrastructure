@@ -6,6 +6,7 @@ import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 
 import java.io.IOException;
 import java.net.URI;
@@ -78,7 +79,10 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
         // verifica que la pantalla (y su contenedor de mapa) cargó sin error.
         wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("h1")));
         assertTrue(driver.findElement(By.cssSelector("h1")).getText().contains("Aeropuertos"));
-        settle(3000); // Plotly se carga de forma diferida
+        // Plotly se descarga de forma diferida: contra AWS tarda mas que en local, se espera a que pinte.
+        new WebDriverWait(driver, Duration.ofSeconds(30)).until(
+                ExpectedConditions.presenceOfElementLocated(By.cssSelector(".js-plotly-plot .main-svg")));
+        settle(1500);
         capture("aeropuertos-y-mapa");
     }
 
@@ -130,6 +134,8 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
 
         WebElement durationInput = wait.until(
                 ExpectedConditions.visibilityOfElementLocated(By.id("durationMinutes")));
+        // El formulario se rellena con un GET asincrono: editar antes lo sobrescribe (visto contra AWS).
+        wait.until(ExpectedConditions.attributeToBe(durationInput, "value", "90"));
         durationInput.clear();
         durationInput.sendKeys("120");
         settle(500);
