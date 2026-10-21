@@ -30,8 +30,11 @@ import static org.junit.jupiter.api.Assertions.fail;
  *   -> Validate airport -> Save itinerary -> Verify itinerary -> Edit -> Delete
  *
  * Tramo Nivel 2 (seccion 38): Create itinerary -> RabbitMQ -> Notification
- * -> Verify notification history, consultado por HTTP a traves del Gateway
- * (propiedad "e2e.gatewayUrl", por defecto http://localhost:8080).
+ * -> Verify notification history, consultado por HTTP a traves del Gateway con la
+ * misma sesion del navegador (cookie SESSION del login con Keycloak, ADR-018).
+ *
+ * Login real contra Keycloak con el usuario tecnico "e2e" del realm (propiedades
+ * "e2e.username" / "e2e.password"; por defecto los valores de desarrollo de Compose).
  *
  * Requiere el stack completo levantado (docker compose up en
  * itinerarios-infrastructure) y accesible en la URL de la propiedad
@@ -39,10 +42,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class ItineraryFullFlowE2ETest extends SeleniumTestBase {
 
+    /** Nombre completo del usuario "e2e" en Keycloak: es el userName que guarda el itinerario. */
     private static final String TEST_USER = "Selenium E2E";
+    private static final String E2E_USERNAME = System.getProperty("e2e.username", "e2e");
+    private static final String E2E_PASSWORD = System.getProperty("e2e.password", "e2e-dev");
     private static final String DEPARTURE_IATA = "BOG";
     private static final String ARRIVAL_IATA = "MDE";
-    private static final String GATEWAY_URL = System.getProperty("e2e.gatewayUrl", "http://localhost:8080");
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
     @Test
@@ -59,10 +64,15 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
 
     private void login() {
         driver.get(BASE_URL + "/login");
-        WebElement userNameInput = wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("userName")));
-        userNameInput.sendKeys(TEST_USER);
+        wait.until(ExpectedConditions.elementToBeClickable(By.id("login-keycloak")));
         capture("login");
-        driver.findElement(By.cssSelector("form button[type='submit']")).click();
+        driver.findElement(By.id("login-keycloak")).click();
+
+        // Pantalla de login de Keycloak, servida por el mismo origen (nginx -> Keycloak).
+        wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("username"))).sendKeys(E2E_USERNAME);
+        driver.findElement(By.id("password")).sendKeys(E2E_PASSWORD);
+        capture("login-keycloak");
+        driver.findElement(By.id("kc-login")).click();
 
         wait.until(ExpectedConditions.urlContains("/dashboard"));
         settle(1500);
@@ -188,7 +198,9 @@ class ItineraryFullFlowE2ETest extends SeleniumTestBase {
     private int countSentNotificationsForTestUser() {
         try {
             HttpResponse<String> response = HTTP.send(
-                    HttpRequest.newBuilder(URI.create(GATEWAY_URL + "/api/notifications")).GET().build(),
+                    HttpRequest.newBuilder(URI.create(BASE_URL + "/api/notifications"))
+                            .header("Cookie", "SESSION=" + driver.manage().getCookieNamed("SESSION").getValue())
+                            .GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             assertEquals(200, response.statusCode(), "GET /api/notifications via Gateway");
             Matcher m = Pattern.compile("\\{[^{}]*\"userName\":\"" + Pattern.quote(TEST_USER)
