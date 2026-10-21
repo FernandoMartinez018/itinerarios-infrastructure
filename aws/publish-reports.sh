@@ -66,6 +66,7 @@ cd "$SITE" && touch .nojekyll && git init -q -b gh-pages && git add -A \
   && git -c user.name="$(git -C "$ROOT/itinerarios-docs" config user.name)" \
          -c user.email="$(git -C "$ROOT/itinerarios-docs" config user.email)" commit -qm "Reportes de pruebas (paso 32)" \
   && git push -qf "https://github.com/$OWNER/itinerarios-docs.git" gh-pages
-"$GH" api "repos/$OWNER/itinerarios-docs/pages" >/dev/null 2>&1 \
-  || "$GH" api -X POST "repos/$OWNER/itinerarios-docs/pages" -f "source[branch]=gh-pages" -f "source[path]=/" >/dev/null
+# GitHub suele habilitar Pages solo al recibir gh-pages; el POST cubre el caso contrario (409 = ya existe).
+"$GH" api -X POST "repos/$OWNER/itinerarios-docs/pages" -f "source[branch]=gh-pages" -f "source[path]=/" >/dev/null 2>&1 || true
+[[ "$("$GH" api "repos/$OWNER/itinerarios-docs/pages" --jq .source.branch)" = gh-pages ]] || { echo "Pages no apunta a gh-pages"; exit 1; }
 echo "Reportes: https://${OWNER,,}.github.io/itinerarios-docs/"
