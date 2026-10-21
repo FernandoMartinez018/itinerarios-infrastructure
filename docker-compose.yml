@@ -114,6 +114,7 @@ services:
     container_name: prometheus
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
     ports:
       - "9090:9090"
     networks:
@@ -184,6 +185,39 @@ services:
     networks:
       - itinerarios-net
 
+  # Keycloak (paso 31, seguridad S2S, seccion 108): emite JWT con OAuth2 Client Credentials.
+  # SOLO DESARROLLO: start-dev con base embebida y secretos de desarrollo por defecto (decision del
+  # usuario: en local se queman para que funcione sin configurar nada). .env puede sobrescribirlos.
+  # Produccion (AWS) usa modo start + PostgreSQL en RDS y secretos en SSM: ver aws/cloudformation/05-ecs.yaml.
+  # Consola admin local: http://localhost:8180 (admin / admin).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    container_name: keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Emisor fijo: los tokens llevan iss=http://keycloak:8080/realms/itinerarios para todos los servicios.
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HEALTH_ENABLED: "true"
+      GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
+      ITINERARY_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
+      # Usuario de prueba (se crea en cada arranque al importar el realm). El correo real va en .env.
+      TEST_USER_EMAIL: ${TEST_USER_EMAIL:-tester@itinerarios.local}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-tester-dev}
+    volumes:
+      - ./keycloak/itinerarios-realm.json:/opt/keycloak/data/import/itinerarios-realm.json:ro
+    ports:
+      - "8180:8080"
+    healthcheck:
+      # La imagen no trae curl: se consulta /health/ready (puerto de management 9000) con bash.
+      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/localhost/9000 && printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q UP <&3']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - itinerarios-net
+
   airport-service:
     build:
       context: ../itinerarios-airport-service
@@ -197,6 +231,7 @@ services:
       COLOMBIA_API_BASE_URL: ${COLOMBIA_API_BASE_URL:-https://api-colombia.com/api/v1}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/itinerarios
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: airport-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -231,6 +266,9 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/itinerarios
+      OAUTH2_TOKEN_URI: http://keycloak:8080/realms/itinerarios/protocol/openid-connect/token
+      OAUTH2_CLIENT_SECRET: ${ITINERARY_CLIENT_SECRET:-dev-itinerary-secret}
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: itinerary-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -245,6 +283,8 @@ services:
         condition: service_healthy
       airport-service:
         condition: service_started
+      keycloak:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       otel-collector:
@@ -266,6 +306,7 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/itinerarios
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: notification-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -295,6 +336,8 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification-service:8083
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+      OAUTH2_TOKEN_URI: http://keycloak:8080/realms/itinerarios/protocol/openid-connect/token
+      OAUTH2_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-dev-gateway-secret}
       JAVA_TOOL_OPTIONS: -javaagent:/app/opentelemetry-javaagent.jar
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -305,10 +348,16 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - airport-service
-      - itinerary-service
-      - notification-service
-      - otel-collector
+      airport-service:
+        condition: service_started
+      itinerary-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
     networks:
       - itinerarios-net
 

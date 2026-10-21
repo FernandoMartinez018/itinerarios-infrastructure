@@ -1,5 +1,10 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertas del paso 31 (ver alert-rules.yml y sus tests en alert-rules.test.yml)
+rule_files:
+  - /etc/prometheus/alert-rules.yml
 
 scrape_configs:
   - job_name: airport-service
