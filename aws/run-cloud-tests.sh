@@ -220,16 +220,16 @@ check "8b. DELETE -> 204" '[ "$(http -X DELETE $GW/api/itineraries/$ID)" = 204 ]
 # Selenium contra el frontend en ECS (nginx -> Gateway), con capturas de cada paso.
 FE="http://$(pubip FrontendService)"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
 E2E_SHOTS="$HERE/../e2e-tests/target/e2e-screenshots"
-for i in $(seq 1 30); do [[ "$(http "$FE/")" = 200 ]] && break; sleep 10; done
-check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'
+for i in $(seq 1 30); do [[ "$(http "$FE/")" = 200 ]] && break; sleep 10; done  # NOSONAR http de la demo (ADR-017)
+check "9. Selenium E2E contra AWS ($FE)"   '(cd "$HERE/../e2e-tests" && "$MVN" -B -ntp -q test -De2e.baseUrl="$FE" -De2e.gatewayUrl="$GW" >>"$LOG" 2>&1)'  # NOSONAR http de la demo (ADR-017)
 log "Pruebas terminadas $(date +%T)"
 
 if [[ "$MODE" = keep ]]; then
   AIRIP=$(pubip AirportService); ITIP=$(pubip ItineraryService); NOIP=$(pubip NotificationService)
   KCIP=$(pubip KeycloakService); GRIP=$(pubip GrafanaService); PRIP=$(pubip PrometheusService); JAIP=$(pubip JaegerService)
-  log ""; log "== URL de la demo (ENCENDIDO hasta: bash aws/run-cloud-tests.sh --down). Solo accesibles desde: $CIDR $CIDR2"
-  log "Frontend            $FE/"
-  log "Gateway (health)    $GW/actuator/health"
+  log ""; log "== URL de la demo (ENCENDIDO hasta: bash aws/run-cloud-tests.sh --down). Solo accesibles desde: $CIDR $CIDR2"  # NOSONAR http de la demo (ADR-017)
+  log "Frontend            $FE/"  # NOSONAR http de la demo (ADR-017)
+  log "Gateway (health)    $GW/actuator/health"  # NOSONAR http de la demo (ADR-017)
   log "Swagger Airport     http://$AIRIP:8081/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Swagger Itinerary   http://$ITIP:8082/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
   log "Swagger Notif.      http://$NOIP:8083/swagger-ui.html"  # NOSONAR demo sin ALB/TLS (ADR-017): solo accesible desde AdminCidr por SG
