@@ -132,6 +132,33 @@ Resources:
             Description: Jaeger UI (admin, segundo enlace)
           - !Ref AWS::NoValue
 
+  KeycloakTaskRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: ECS Exec en Keycloak para abrir la consola de admin por tunel de Session Manager (sin exponerla por HTTP).
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: ecs-exec-ssmmessages
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'   # ssmmessages no admite restriccion por recurso
+
   ExecutionRole:
     Type: AWS::IAM::Role
     Metadata:
@@ -215,6 +242,7 @@ Resources:
       Cpu: '512'
       Memory: '2048'
       ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt KeycloakTaskRole.Arn
       ContainerDefinitions:
         - Name: keycloak
           Image: quay.io/keycloak/keycloak:26.7.4
@@ -663,6 +691,9 @@ Resources:
       LaunchType: FARGATE
       DesiredCount: 1
       TaskDefinition: !Ref KeycloakTask
+      # Consola de admin solo por tunel (aws ssm start-session, port forwarding): el realm master exige HTTPS
+      # desde IPs publicas y la demo no tiene TLS; asi la clave de admin no viaja en claro.
+      EnableExecuteCommand: true
       ServiceRegistries: [{ RegistryArn: !GetAtt KeycloakDiscovery.Arn }]
       NetworkConfiguration:
         AwsvpcConfiguration:
