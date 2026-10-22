@@ -43,7 +43,7 @@ teardown() {
   aws_ s3 rm "s3://$BUCKET" --recursive --only-show-errors 2>/dev/null; aws_ s3api delete-bucket --bucket "$BUCKET" 2>/dev/null
   ssm_ delete-parameters --names /itinerarios/db/airport_password /itinerarios/db/itinerary_password \
        /itinerarios/db/notification_password /itinerarios/rabbitmq/password /itinerarios/db/keycloak_password \
-       /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/oauth2/gateway_secret \
+       /itinerarios/keycloak/admin_password /itinerarios/keycloak/realm /itinerarios/keycloak/realm_2 /itinerarios/oauth2/gateway_secret \
        /itinerarios/oauth2/itinerary_secret /itinerarios/keycloak/test_user_email \
        /itinerarios/keycloak/test_user_password /itinerarios/grafana/admin_password \
        /itinerarios/keycloak/test_user_first_name /itinerarios/keycloak/e2e_user_password >/dev/null 2>&1
@@ -83,8 +83,14 @@ done
 # Realm de Keycloak (sin secretos: placeholders ${...}) como String compacto en SSM; lo lee la tarea ECS.
 python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(',',':')))" \
   "$(winpath "$HERE/../keycloak/itinerarios-realm.json")" > realm.min.json
-ssm_ put-parameter --name /itinerarios/keycloak/realm --type String --overwrite \
-     --value "file://$(winpath "$PWD/realm.min.json")" >/dev/null && rm -f realm.min.json
+# SSM Standard admite 4 KB: se parte en dos parametros que la tarea concatena (realm + realm_2).
+head -c 4000 realm.min.json > realm.1.json; tail -c +4001 realm.min.json > realm.2.json
+[[ -s realm.2.json && $(wc -c < realm.2.json) -le 4096 ]] || { log "realm fuera de rango para 2 partes"; exit 1; }
+for part in "realm:1" "realm_2:2"; do
+  ssm_ put-parameter --name "/itinerarios/keycloak/${part%%:*}" --type String --overwrite \
+       --value "file://$(winpath "$PWD/realm.${part#*:}.json")" >/dev/null || exit 1
+done
+rm -f realm.min.json realm.1.json realm.2.json
 # Usuario de prueba de Keycloak: correo desde el entorno o el .env local (fuera de Git).
 TEST_USER_EMAIL="${TEST_USER_EMAIL:-$(grep -E '^TEST_USER_EMAIL=' "$HERE/../.env" 2>/dev/null | cut -d= -f2-)}"
 ssm_ put-parameter --name /itinerarios/keycloak/test_user_email --type String --overwrite \

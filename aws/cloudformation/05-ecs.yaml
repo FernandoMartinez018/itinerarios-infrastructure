@@ -221,7 +221,7 @@ Resources:
           PortMappings: [{ ContainerPort: 8080 }]
           EntryPoint: ['/bin/bash', '-c']
           Command:
-            - 'mkdir -p /opt/keycloak/data/import && printf "%s" "$REALM_JSON" > /opt/keycloak/data/import/itinerarios-realm.json && exec /opt/keycloak/bin/kc.sh start --import-realm'
+            - 'mkdir -p /opt/keycloak/data/import && printf "%s%s" "$REALM_JSON" "$REALM_JSON_2" > /opt/keycloak/data/import/itinerarios-realm.json && exec /opt/keycloak/bin/kc.sh start --import-realm'
           Environment:
             - { Name: KC_DB, Value: postgres }
             - Name: KC_DB_URL
@@ -241,6 +241,8 @@ Resources:
             - { Name: GATEWAY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/gateway_secret' }
             - { Name: ITINERARY_CLIENT_SECRET, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/oauth2/itinerary_secret' }
             - { Name: REALM_JSON, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/realm' }
+            # SSM Standard admite 4 KB por parametro: el realm minificado va partido en dos (sin pagar tier Advanced).
+            - { Name: REALM_JSON_2, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/realm_2' }
             - { Name: TEST_USER_EMAIL, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_email' }
             - { Name: TEST_USER_PASSWORD, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_password' }
             - { Name: TEST_USER_FIRST_NAME, ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/itinerarios/keycloak/test_user_first_name' }
